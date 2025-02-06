@@ -142,14 +142,21 @@ class TestSpatialPRRP(unittest.TestCase):
     def test_merge_disconnected_areas(self):
         """
         Tests that merge_disconnected_areas correctly merges disconnected components into the region.
-        In this test, a disconnected area is simulated and should be merged.
+        In this test, a disconnected available area is simulated by modifying the available areas.
+        The disconnected component (containing area 12) should be merged into the current region.
         """
         region = {1, 2, 3, 4}
-        # Simulate a disconnected area (e.g., area 12) by removing it and then adding it back.
-        available = deepcopy(self.available_areas)
-        if 12 in available:
-            available.remove(12)
-        available.add(12)
+        # In the PRRP algorithm, available_areas should be the set of unassigned areas,
+        # so we remove the already assigned regions.
+        available = deepcopy(self.available_areas) - region
+
+        # Simulate disconnection for area 12:
+        # Area 12 is connected to areas 8 and 11 in the full graph.
+        # By removing areas 8 and 11 from available, area 12 becomes isolated.
+        available.discard(8)
+        available.discard(11)
+        available.add(12)  # Ensure area 12 is in available
+
         merged_region = merge_disconnected_areas(
             self.adj_list, available, region)
         self.assertIn(12, merged_region,
@@ -233,8 +240,8 @@ class TestSpatialPRRP(unittest.TestCase):
         # Check for statistical independence: the solutions should not be all identical.
         unique_solutions = {frozenset(frozenset(region) for region in sol)
                             for sol in parallel_solutions}
-        self.assertTrue(len(unique_solutions) > 1,
-                        "Parallel solutions should be statistically independent and not identical.")
+        self.assertGreater(len(unique_solutions), 1,
+                           "Parallel solutions should be statistically independent and not identical.")
 
     # ==============================
     # 7. Edge Cases

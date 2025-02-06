@@ -1,6 +1,6 @@
 import random
 import logging
-from typing import Dict, Set, List
+from typing import Dict, Set, List, Any
 from multiprocessing import Pool, cpu_count
 
 from src.utils import (
@@ -262,21 +262,20 @@ def merge_disconnected_areas(
         logger.error("No connected components found in available areas.")
         raise RuntimeError("No connected components found in available areas.")
 
-    # If available areas are already contiguous, no merging is needed.
-    if len(components) == 1:
-        logger.info("Unassigned areas are contiguous. No merging required.")
-        return current_region
-
     # Identify the largest connected component.
     largest_component: Set[int] = find_largest_component(components)
 
     # Merge all smaller disconnected components into the current region.
+    merged_areas = set()
     for comp in components:
         if comp != largest_component:
             logger.info(
                 f"Merging disconnected component with {len(comp)} areas into the current region: {comp}")
             current_region.update(comp)
-            available_areas.difference_update(comp)
+            merged_areas.update(comp)
+
+    # Ensure merged areas are removed from available_areas.
+    available_areas.difference_update(merged_areas)
 
     logger.info("Completed merging of disconnected unassigned areas.")
 
