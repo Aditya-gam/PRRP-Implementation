@@ -39,3 +39,4 @@ Thumbs.db
 # Ignore test reports
 coverage/
 *.cover
+temp/
