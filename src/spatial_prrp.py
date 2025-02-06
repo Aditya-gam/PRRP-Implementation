@@ -190,13 +190,16 @@ def grow_region(adj_list: Dict[int, Set[int]],
 # ==============================
 def find_largest_component(connected_components: List[Set[int]]) -> Set[int]:
     """
-    Finds the largest spatially contiguous component among unassigned areas.
+    Identifies the largest contiguous connected component among the provided components.
 
     Parameters:
-        connected_components (List[Set[int]]): List of all connected components.
+        connected_components (List[Set[int]]): A list of sets, where each set represents a connected component of area IDs.
 
     Returns:
-        Set[int]: The largest connected component.
+        Set[int]: The largest connected component (by number of areas).
+
+    Raises:
+        ValueError: If no connected components are provided.
     """
     if not connected_components:
         logger.error("No connected components found.")
@@ -213,41 +216,62 @@ def find_largest_component(connected_components: List[Set[int]]) -> Set[int]:
 # 4. Region Merging Phase
 # ==============================
 def merge_disconnected_areas(
-    adj_list: Dict[int, List[int]],
+    adj_list: Dict[int, Set[int]],
     available_areas: Set[int],
-    current_region: Set[int]
+    current_region: Set[int],
+    parallelize: bool = False
 ) -> Set[int]:
     """
-    Ensures spatial contiguity by merging disconnected unassigned areas into the current region.
+    Merges disconnected unassigned areas into the current region to ensure spatial contiguity.
+
+    This function checks whether the unassigned areas (available_areas) are spatially contiguous.
+    If they are fragmented into multiple connected components, the largest component is retained as the updated
+    available_areas, and all smaller disconnected components are merged into the current_region.
 
     Parameters:
-        adj_list (Dict[int, List[int]]): The adjacency list representation of spatial areas.
-        available_areas (Set[int]): Set of unassigned areas before merging.
-        current_region (Set[int]): The region grown in Phase 1.
+        adj_list (Dict[int, Set[int]]): The neighborhood graph represented as an adjacency list.
+        available_areas (Set[int]): Set of unassigned area IDs.
+        current_region (Set[int]): The most recently grown region.
+        parallelize (bool, optional): Flag to enable parallel execution if applicable. Defaults to False.
 
     Returns:
-        Set[int]: The updated region after merging disconnected areas.
+        Set[int]: The updated current_region after merging disconnected areas.
+
+    Raises:
+        RuntimeError: If no connected components are found in the available areas.
     """
-    # Find spatially contiguous components of the remaining unassigned areas
-    connected_components = find_connected_components(
-        {area: adj_list[area] for area in available_areas})
-
-    if len(connected_components) <= 1:
+    if parallelize:
         logger.info(
-            "Unassigned areas are already spatially contiguous. No merging required.")
-        return current_region  # No merging needed
+            "Parallelize flag is set, but sequential execution is used for region merging.")
 
-    # Identify the largest connected component to remain as available_areas
-    largest_component = find_largest_component(connected_components)
+    # Create a subgraph from available areas, ensuring only edges between available areas are retained.
+    sub_adj: Dict[int, List[int]] = {
+        area: list(adj_list.get(area, set()) & available_areas) for area in available_areas
+    }
 
-    # Identify the smaller disconnected components to merge into the current region
-    disconnected_components = [
-        comp for comp in connected_components if comp != largest_component]
+    # Find connected components in the subgraph using the utility function.
+    components: List[Set[int]] = find_connected_components(sub_adj)
 
-    for component in disconnected_components:
-        logger.info(
-            f"Merging {len(component)} areas into the current region: {component}")
-        current_region.update(component)
-        available_areas.difference_update(component)
+    if not components:
+        logger.error("No connected components found in available areas.")
+        raise RuntimeError("No connected components found in available areas.")
+
+    # If available areas are already contiguous, no merging is needed.
+    if len(components) == 1:
+        logger.info("Unassigned areas are contiguous. No merging required.")
+        return current_region
+
+    # Identify the largest connected component.
+    largest_component: Set[int] = find_largest_component(components)
+
+    # Merge all smaller disconnected components into the current region.
+    for comp in components:
+        if comp != largest_component:
+            logger.info(
+                f"Merging disconnected component with {len(comp)} areas into the current region: {comp}")
+            current_region.update(comp)
+            available_areas.difference_update(comp)
+
+    logger.info("Completed merging of disconnected unassigned areas.")
 
     return current_region
