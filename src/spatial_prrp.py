@@ -1,3 +1,4 @@
+from src.utils import find_connected_components, find_boundary_areas
 import random
 import logging
 from typing import Dict, Set, List
@@ -281,95 +282,126 @@ def merge_disconnected_areas(
 # ==============================
 
 
-def split_region(region: Set[int], target_cardinality: int, adj_list: Dict[int, Set[int]]) -> Set[int]:
+def remove_boundary_areas(region: Set[int],
+                          excess_count: int,
+                          adj_list: Dict[int, Set[int]]) -> Set[int]:
     """
-    Adjusts the size of a region by removing excess areas while maintaining spatial contiguity.
+    Randomly removes boundary areas from a region until the specified excess count
+    is removed, while ensuring that spatial contiguity is maintained.
 
-    If the region exceeds its target cardinality due to merging, this function removes boundary areas
-    until the region meets its target size. If removal causes the region to split into multiple 
-    components, only the largest contiguous component is retained.
+    The function computes the set of boundary areas (areas that have at least one
+    neighbor outside the region) and randomly removes one area at a time. After each
+    removal, the connectivity of the updated region is checked. If the region splits
+    into multiple connected components, only the largest component is retained.
 
     Parameters:
-        region (Set[int]): The region to be adjusted.
-        target_cardinality (int): The required number of areas in the region.
-        adj_list (Dict[int, Set[int]]): The neighborhood graph represented as an adjacency list.
+        region (Set[int]): The current set of area IDs in the region.
+        excess_count (int): The number of areas to remove from the region.
+        adj_list (Dict[int, Set[int]]): The adjacency list representing spatial neighbors.
 
     Returns:
-        Set[int]: The adjusted region with the correct cardinality.
+        Set[int]: The updated region after removing the excess boundary areas.
+
+    Raises:
+        RuntimeError: If no boundary areas can be found to remove when needed.
     """
-    if len(region) <= target_cardinality:
+    # Work on a copy so as not to modify the input region directly.
+    adjusted_region = region.copy()
+
+    while excess_count > 0:
+        # Compute boundary areas. Since our utilities expect lists,
+        # we convert the adj_list from sets to lists.
+        boundary = find_boundary_areas(
+            adjusted_region, {k: list(v) for k, v in adj_list.items()})
+        if not boundary:
+            logger.error(
+                "No boundary areas found; cannot remove further without risking discontiguity.")
+            raise RuntimeError(
+                "No boundary areas available for removal while splitting region.")
+
+        # Randomly select a boundary area to remove.
+        area_to_remove = random.choice(list(boundary))
+        adjusted_region.remove(area_to_remove)
+        excess_count -= 1
         logger.info(
-            f"Region already satisfies cardinality {target_cardinality}. No splitting needed.")
-        return region
+            f"Removed boundary area {area_to_remove} from region; {excess_count} removals remaining.")
 
-    # Compute excess areas that need to be removed
-    excess_count = len(region) - target_cardinality
-    logger.info(
-        f"Splitting region: Removing {excess_count} excess areas to match cardinality.")
-
-    # Remove excess areas from boundary
-    adjusted_region = remove_boundary_areas(region, excess_count, adj_list)
-
-    # Final check: Ensure that the region is still contiguous
-    connected_components = find_connected_components(
-        {area: adj_list[area] for area in adjusted_region})
-
-    if len(connected_components) > 1:
-        logger.warning(
-            "Region split into multiple components. Keeping only the largest contiguous component.")
-        adjusted_region = max(connected_components, key=len)
+        # After removal, check spatial contiguity by building a subgraph.
+        sub_adj: Dict[int, List[int]] = {
+            area: list(adj_list.get(area, set()) & adjusted_region) for area in adjusted_region
+        }
+        components = find_connected_components(sub_adj)
+        if len(components) > 1:
+            # If fragmentation occurs, keep only the largest connected component.
+            largest_component = max(components, key=len)
+            removed = adjusted_region - largest_component
+            adjusted_region = largest_component
+            logger.warning(
+                f"Region split into multiple components. Keeping largest component with {len(adjusted_region)} areas; removed {removed}."
+            )
+            # Continue removal if further excess removal is needed.
 
     return adjusted_region
 
 
-def remove_boundary_areas(region: Set[int], excess_count: int, adj_list: Dict[int, Set[int]]) -> Set[int]:
+def split_region(region: Set[int],
+                 target_cardinality: int,
+                 adj_list: Dict[int, Set[int]]) -> Set[int]:
     """
-    Randomly removes excess boundary areas from a region while maintaining spatial contiguity.
+    Adjusts a region’s size by removing excess areas to meet the target cardinality,
+    while ensuring that the region remains spatially contiguous.
 
-    This function ensures that the removal does not break the region into multiple disconnected components.
-    It follows these steps:
-    1. Identifies the boundary areas of the region.
-    2. Randomly removes areas until the excess count is reached.
-    3. Checks if the region remains contiguous after removal.
-    4. If splitting occurs, keeps the largest contiguous component.
+    If the region exceeds its target cardinality (due to the merging phase), this function
+    computes the number of excess areas and removes them using a randomized boundary area
+    removal strategy. After removals, if the region becomes fragmented into multiple connected
+    components, only the largest contiguous component is retained.
 
     Parameters:
-        region (Set[int]): The region to be adjusted.
-        excess_count (int): The number of areas to remove.
+        region (Set[int]): The set of area IDs currently in the region.
+        target_cardinality (int): The required number of areas for the region.
         adj_list (Dict[int, Set[int]]): The neighborhood graph represented as an adjacency list.
 
     Returns:
-        Set[int]: The adjusted region after boundary removals.
+        Set[int]: The adjusted region that meets the target cardinality.
+
+    Raises:
+        ValueError: If the region size is below the target cardinality.
     """
-    adjusted_region = region.copy()
+    current_size = len(region)
+    if current_size < target_cardinality:
+        error_msg = (
+            f"Region size ({current_size}) is below the target cardinality ({target_cardinality}).")
+        logger.error(error_msg)
+        raise ValueError(error_msg)
 
-    while excess_count > 0:
-        # Compute boundary areas
-        boundary_areas = find_boundary_areas(adjusted_region, adj_list)
+    if current_size == target_cardinality:
+        logger.info(
+            "Region size matches the target cardinality; no splitting needed.")
+        return region
 
-        if not boundary_areas:
-            logger.error(
-                "No boundary areas available for removal. Splitting may fail.")
-            return adjusted_region  # Return as is if no more removable areas
+    excess_count = current_size - target_cardinality
+    logger.info(
+        f"Splitting region: current size = {current_size}, target = {target_cardinality}, "
+        f"excess areas to remove = {excess_count}."
+    )
 
-        # Select a random boundary area for removal
-        to_remove = random.choice(list(boundary_areas))
-        adjusted_region.remove(to_remove)
-        logger.debug(
-            f"Removed boundary area {to_remove}. Remaining excess: {excess_count - 1}")
+    # Remove excess boundary areas until the region size matches the target.
+    adjusted_region = remove_boundary_areas(region, excess_count, adj_list)
 
-        # Update count of areas to be removed
-        excess_count -= 1
+    # Final connectivity check: rebuild a subgraph and verify that the region is contiguous.
+    sub_adj_final: Dict[int, List[int]] = {
+        area: list(adj_list.get(area, set()) & adjusted_region) for area in adjusted_region
+    }
+    final_components = find_connected_components(sub_adj_final)
+    if len(final_components) > 1:
+        largest_component = max(final_components, key=len)
+        logger.warning(
+            f"After splitting, region is fragmented into {len(final_components)} components; "
+            f"keeping largest component with {len(largest_component)} areas."
+        )
+        adjusted_region = largest_component
 
-        # Ensure the region remains contiguous
-        connected_components = find_connected_components(
-            {area: adj_list[area] for area in adjusted_region})
-
-        if len(connected_components) > 1:
-            # If splitting occurs, keep only the largest contiguous component
-            largest_component = max(connected_components, key=len)
-            logger.warning(
-                "Region became fragmented after removal. Keeping the largest component.")
-            return largest_component
+    logger.info(
+        f"Region splitting complete. Final region size is {len(adjusted_region)} areas.")
 
     return adjusted_region
