@@ -2,8 +2,14 @@ from src.utils import find_connected_components, find_boundary_areas
 import random
 import logging
 from typing import Dict, Set, List
+from multiprocessing import Pool, cpu_count
 
-from src.utils import find_boundary_areas, find_connected_components
+from src.utils import (
+    construct_adjacency_list,
+    find_connected_components,
+    find_boundary_areas,
+    parallel_execute,
+)
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
@@ -405,3 +411,108 @@ def split_region(region: Set[int],
         f"Region splitting complete. Final region size is {len(adjusted_region)} areas.")
 
     return adjusted_region
+
+# ==============================
+# 6. PRRP Execution Function
+# ==============================
+
+
+def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int]) -> List[Set[int]]:
+    """
+    Executes the full PRRP algorithm, forming the specified number of regions
+    while maintaining spatial contiguity and satisfying cardinality constraints.
+
+    Parameters:
+        areas (List[Dict]): List of spatial areas with 'id' and 'geometry' attributes.
+        num_regions (int): Number of regions to create.
+        cardinalities (List[int]): List of target sizes for each region.
+
+    Returns:
+        List[Set[int]]: A list of sets, each containing area IDs forming a valid region.
+    """
+    if num_regions != len(cardinalities):
+        raise ValueError(
+            "Number of regions must match the length of the cardinalities list.")
+
+    # Construct adjacency list for spatial relationships
+    adj_list = construct_adjacency_list(areas)
+    available_areas = set(adj_list.keys())
+
+    # Sort cardinalities in descending order (for better feasibility)
+    cardinalities.sort(reverse=True)
+
+    regions = []
+
+    for target_cardinality in cardinalities:
+        logger.info(f"Growing region with target size: {target_cardinality}")
+
+        try:
+            # Grow a region while maintaining spatial contiguity
+            region = grow_region(adj_list, available_areas, target_cardinality)
+
+            # Merge disconnected areas to maintain spatial connectivity
+            merged_region = merge_disconnected_areas(
+                adj_list, available_areas, region)
+
+            # Adjust the region size if it exceeds the target
+            final_region = split_region(
+                merged_region, target_cardinality, adj_list)
+
+            regions.append(final_region)
+            logger.info(f"Region finalized with {len(final_region)} areas.")
+
+        except Exception as e:
+            logger.error(f"Failed to generate region: {e}")
+            return []  # Return an empty result indicating failure
+
+    return regions
+
+# ==============================
+# 7. Parallel Execution of PRRP
+# ==============================
+
+
+def run_parallel_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int],
+                      solutions_count: int, num_threads: int = 1, use_multiprocessing: bool = False) -> List[List[Set[int]]]:
+    """
+    Runs multiple independent instances of PRRP in parallel to generate multiple solutions.
+
+    Parameters:
+        areas (List[Dict]): List of spatial areas with 'id' and 'geometry'.
+        num_regions (int): Number of regions to create per solution.
+        cardinalities (List[int]): List of target sizes for each region.
+        solutions_count (int): Number of independent PRRP solutions to generate.
+        num_threads (int, optional): Number of parallel threads/processes to use.
+        use_multiprocessing (bool, optional): Whether to use multiprocessing.
+
+    Returns:
+        List[List[Set[int]]]: A list of PRRP solutions, each being a list of region sets.
+    """
+    def single_run(_: int) -> List[Set[int]]:
+        return run_prrp(areas, num_regions, cardinalities)
+
+    results = parallel_execute(single_run, range(
+        solutions_count), num_threads, use_multiprocessing)
+    return results
+
+
+# ==============================
+# 8. Main Execution Block
+# ==============================
+if __name__ == "__main__":
+    # Example Usage
+    sample_areas = [
+        # Dummy geometries for testing
+        {'id': i, 'geometry': None} for i in range(50)
+    ]
+    num_regions = 5
+    cardinalities = [10, 10, 10, 10, 10]
+
+    logger.info("Running PRRP algorithm...")
+    final_regions = run_prrp(sample_areas, num_regions, cardinalities)
+    logger.info(f"Final generated regions: {final_regions}")
+
+    logger.info("Running parallel PRRP algorithm...")
+    parallel_solutions = run_parallel_prrp(
+        sample_areas, num_regions, cardinalities, solutions_count=3, num_threads=2)
+    logger.info(f"Generated parallel PRRP solutions: {parallel_solutions}")
