@@ -25,7 +25,6 @@ from multiprocessing import Pool, cpu_count
 import os
 import copy
 from typing import Dict, List, Set, Any, Tuple, Callable, Iterable
-
 import geopandas as gpd
 from shapely.geometry.base import BaseGeometry
 
@@ -38,6 +37,7 @@ logger.setLevel(logging.DEBUG)  # Adjust as needed.
 handler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 handler.setFormatter(formatter)
+
 if not logger.handlers:
     logger.addHandler(handler)
 
@@ -99,6 +99,7 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, List[Any]]:
             geom = area.geometry
             adj_list[idx] = []
             possible_matches_index = list(sindex.intersection(geom.bounds))
+
             for other_idx in possible_matches_index:
                 if other_idx == idx:
                     continue
@@ -107,23 +108,28 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, List[Any]]:
                     adj_list[idx].append(other_idx)
     elif isinstance(areas, list):
         n = len(areas)
+
         for i in range(n):
             area_i = areas[i]
             id_i = area_i.get('id', i)
             geom_i = area_i.get('geometry')
+
             if geom_i is None:
                 logger.error(f"Area with id {id_i} has no geometry.")
                 raise ValueError(f"Area with id {id_i} has no geometry.")
             adj_list[id_i] = []
+
             for j in range(n):
                 if i == j:
                     continue
                 area_j = areas[j]
                 id_j = area_j.get('id', j)
                 geom_j = area_j.get('geometry')
+
                 if geom_j is None:
                     logger.error(f"Area with id {id_j} has no geometry.")
                     raise ValueError(f"Area with id {id_j} has no geometry.")
+                
                 if _has_rook_adjacency(geom_i, geom_j):
                     adj_list[id_i].append(id_j)
     else:
@@ -131,6 +137,7 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, List[Any]]:
         raise TypeError("Unsupported type for areas. Expected GeoDataFrame or list.")
 
     logger.info("Adjacency list constructed successfully.")
+
     return adj_list
 
 
@@ -151,17 +158,22 @@ def find_connected_components(adj_list: Dict[Any, List[Any]]) -> List[Set[Any]]:
         if node not in visited:
             component: Set[Any] = set()
             stack: List[Any] = [node]
+
             while stack:
                 n = stack.pop()
+
                 if n not in visited:
                     visited.add(n)
                     component.add(n)
+
                     for neighbor in adj_list.get(n, []):
                         if neighbor not in visited:
                             stack.append(neighbor)
+
             components.append(component)
 
     logger.info(f"Found {len(components)} connected component(s).")
+
     return components
 
 
@@ -178,6 +190,7 @@ def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
     """
     if node not in adj_list:
         logger.error(f"Node {node} not found in the adjacency list.")
+
         raise KeyError(f"Node {node} not found in the adjacency list.")
 
     def tarjan_ap_util(v: Any, parent: Any, disc: Dict[Any, int],
@@ -191,8 +204,10 @@ def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
                 children += 1
                 tarjan_ap_util(w, v, disc, low, time, ap)
                 low[v] = min(low[v], low[w])
+
                 if parent is None and children > 1:
                     ap.add(v)
+
                 if parent is not None and low[w] >= disc[v]:
                     ap.add(v)
             elif w != parent:
@@ -209,6 +224,7 @@ def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
 
     is_ap = node in ap
     logger.info(f"Node {node} is {'an' if is_ap else 'not an'} articulation point.")
+
     return is_ap
 
 
@@ -227,6 +243,7 @@ def remove_articulation_area(adj_list: Dict[Any, List[Any]], node: Any) -> Dict[
     """
     if node not in adj_list:
         logger.error(f"Node {node} not found in the adjacency list.")
+
         raise KeyError(f"Node {node} not in adjacency list.")
 
     new_adj = {k: list(v) for k, v in adj_list.items()}
@@ -244,13 +261,16 @@ def remove_articulation_area(adj_list: Dict[Any, List[Any]], node: Any) -> Dict[
     largest_component = max(components, key=len)
     new_adj[node] = []
     original_neighbors = adj_list[node]
+
     for neighbor in original_neighbors:
         if neighbor in largest_component:
             new_adj[node].append(neighbor)
+
             if node not in new_adj[neighbor]:
                 new_adj[neighbor].append(node)
 
     logger.warning(f"Articulation node {node} removed and reassigned to maintain connectivity.")
+
     return new_adj
 
 
@@ -271,20 +291,25 @@ def random_seed_selection(adj_list: Dict[Any, List[Any]], assigned_regions: Set[
     unassigned = set(adj_list.keys()) - assigned_regions
     if not unassigned:
         logger.error("No unassigned nodes available for seed selection.")
+
         raise ValueError("No unassigned nodes available.")
 
     if method == "gapless":
         candidate_seeds = {node for node in unassigned
                            if any(neighbor in assigned_regions for neighbor in adj_list[node])}
+        
         if candidate_seeds:
             chosen = random.choice(list(candidate_seeds))
             logger.info(f"Selected gapless seed: {chosen}")
             return chosen
+
         chosen = random.choice(list(unassigned))
         logger.info(f"No gapless candidate found, selected random seed: {chosen}")
+
         return chosen
     else:
         logger.error(f"Unknown seed selection method: {method}")
+
         raise ValueError(f"Unknown seed selection method: {method}")
 
 
@@ -325,6 +350,7 @@ def load_graph_from_metis(file_path: str) -> Dict[int, List[int]]:
                 adj_list[i] = []
 
         logger.info(f"Loaded graph from {file_path} successfully.")
+
         return adj_list
 
     except Exception as e:
@@ -348,6 +374,7 @@ def save_graph_to_metis(file_path: str, adj_list: Dict[int, List[int]]) -> None:
         num_edges = sum(len(neighbors) for neighbors in adj_list.values()) // 2
         with open(file_path, 'w') as f:
             f.write(f"{num_nodes} {num_edges}\n")
+
             for i in range(1, num_nodes + 1):
                 neighbors = adj_list.get(i, [])
                 f.write(" ".join(map(str, neighbors)) + "\n")
@@ -371,6 +398,7 @@ def find_boundary_areas(region: Set[Any], adj_list: Dict[Any, List[Any]]) -> Set
         Set[Any]: A set of nodes that are boundary areas of the region.
     """
     boundary: Set[Any] = set()
+
     for node in region:
         for neighbor in adj_list.get(node, []):
             if neighbor not in region:
@@ -378,6 +406,7 @@ def find_boundary_areas(region: Set[Any], adj_list: Dict[Any, List[Any]]) -> Set
                 break
 
     logger.info(f"Identified {len(boundary)} boundary area(s) in the region.")
+
     return boundary
 
 
@@ -401,6 +430,7 @@ def calculate_low_link_values(adj_list: Dict[Any, List[Any]]) -> Tuple[Dict[Any,
     def dfs(u: Any, parent: Any) -> None:
         disc[u] = low[u] = time[0]
         time[0] += 1
+
         for v in adj_list[u]:
             if v not in disc:
                 dfs(v, u)
@@ -413,6 +443,7 @@ def calculate_low_link_values(adj_list: Dict[Any, List[Any]]) -> Tuple[Dict[Any,
             dfs(node, None)
 
     logger.info("Calculated low-link values for all nodes.")
+
     return disc, low
 
 
@@ -445,10 +476,13 @@ def parallel_execute(function: Callable[[Any], Any],
             logger.info("Using threading for parallel execution.")
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
                 results = list(executor.map(function, data))
+        
         logger.info("Parallel execution completed successfully.")
+
         return results
     else:
         logger.info("Parallel processing disabled or num_threads <= 1. Executing sequentially.")
         results = [function(item) for item in data]
         logger.info("Sequential execution completed successfully.")
+        
         return results
