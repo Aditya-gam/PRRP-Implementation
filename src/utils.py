@@ -129,12 +129,14 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, List[Any]]:
                 if geom_j is None:
                     logger.error(f"Area with id {id_j} has no geometry.")
                     raise ValueError(f"Area with id {id_j} has no geometry.")
-                
+
                 if _has_rook_adjacency(geom_i, geom_j):
                     adj_list[id_i].append(id_j)
     else:
-        logger.error("Unsupported type for areas. Expected GeoDataFrame or list.")
-        raise TypeError("Unsupported type for areas. Expected GeoDataFrame or list.")
+        logger.error(
+            "Unsupported type for areas. Expected GeoDataFrame or list.")
+        raise TypeError(
+            "Unsupported type for areas. Expected GeoDataFrame or list.")
 
     logger.info("Adjacency list constructed successfully.")
 
@@ -223,7 +225,8 @@ def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
             tarjan_ap_util(v, None, disc, low, time, ap)
 
     is_ap = node in ap
-    logger.info(f"Node {node} is {'an' if is_ap else 'not an'} articulation point.")
+    logger.info(
+        f"Node {node} is {'an' if is_ap else 'not an'} articulation point.")
 
     return is_ap
 
@@ -231,8 +234,8 @@ def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
 def remove_articulation_area(adj_list: Dict[Any, List[Any]], node: Any) -> Dict[Any, List[Any]]:
     """
     Removes an articulation point from the graph and reassigns it to maintain spatial connectivity.
-    If removal of the node disconnects the graph, the node is reassigned to the largest connected
-    component by reconnecting it to neighbors within that component.
+    If removal of the node disconnects the graph, the node is reassigned to the largest connected component.
+    If removal does not disconnect the graph, the node is reassigned to at least one of its original neighbors.
 
     Parameters:
         adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
@@ -243,33 +246,47 @@ def remove_articulation_area(adj_list: Dict[Any, List[Any]], node: Any) -> Dict[
     """
     if node not in adj_list:
         logger.error(f"Node {node} not found in the adjacency list.")
-
         raise KeyError(f"Node {node} not in adjacency list.")
 
+    # Create a copy of the adjacency list
     new_adj = {k: list(v) for k, v in adj_list.items()}
 
-    for neighbor in new_adj[node]:
+    # Store original neighbors before removal
+    original_neighbors = new_adj[node]
+
+    # Remove the node from all neighbors' lists
+    for neighbor in original_neighbors:
         if node in new_adj[neighbor]:
             new_adj[neighbor].remove(node)
+
+    # Remove the node itself
     del new_adj[node]
 
+    # Check if the removal disconnected the graph
     components = find_connected_components(new_adj)
-    if len(components) <= 1:
-        logger.info("Removal of the node did not disconnect the graph.")
-        return new_adj
 
-    largest_component = max(components, key=len)
-    new_adj[node] = []
-    original_neighbors = adj_list[node]
+    if len(components) > 1:
+        # If disconnected, reassign the node to the largest component
+        largest_component = max(components, key=len)
+        new_adj[node] = []
 
-    for neighbor in original_neighbors:
-        if neighbor in largest_component:
-            new_adj[node].append(neighbor)
-
-            if node not in new_adj[neighbor]:
+        for neighbor in original_neighbors:
+            if neighbor in largest_component:
+                new_adj[node].append(neighbor)
+                # Ensure bidirectional connectivity
                 new_adj[neighbor].append(node)
 
-    logger.warning(f"Articulation node {node} removed and reassigned to maintain connectivity.")
+        logger.warning(
+            f"Articulation node {node} removed and reassigned to maintain connectivity.")
+    else:
+        # If NOT disconnected, just reassign the node to at least one of its original neighbors
+        # Assign to the first original neighbor
+        new_adj[node] = [original_neighbors[0]]
+        new_adj[original_neighbors[0]].append(
+            node)  # Ensure bidirectional connection
+
+        logger.info(
+            f"Node {node} was removed but reassigned to maintain connectivity.")
 
     return new_adj
 
@@ -297,14 +314,15 @@ def random_seed_selection(adj_list: Dict[Any, List[Any]], assigned_regions: Set[
     if method == "gapless":
         candidate_seeds = {node for node in unassigned
                            if any(neighbor in assigned_regions for neighbor in adj_list[node])}
-        
+
         if candidate_seeds:
             chosen = random.choice(list(candidate_seeds))
             logger.info(f"Selected gapless seed: {chosen}")
             return chosen
 
         chosen = random.choice(list(unassigned))
-        logger.info(f"No gapless candidate found, selected random seed: {chosen}")
+        logger.info(
+            f"No gapless candidate found, selected random seed: {chosen}")
 
         return chosen
     else:
@@ -379,9 +397,11 @@ def save_graph_to_metis(file_path: str, adj_list: Dict[int, List[int]]) -> None:
                 neighbors = adj_list.get(i, [])
                 f.write(" ".join(map(str, neighbors)) + "\n")
 
-        logger.info(f"Graph saved to {file_path} in METIS format successfully.")
+        logger.info(
+            f"Graph saved to {file_path} in METIS format successfully.")
     except Exception as e:
-        logger.error(f"Failed to save graph to METIS format at {file_path}: {e}")
+        logger.error(
+            f"Failed to save graph to METIS format at {file_path}: {e}")
         raise
 
 
@@ -476,13 +496,14 @@ def parallel_execute(function: Callable[[Any], Any],
             logger.info("Using threading for parallel execution.")
             with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
                 results = list(executor.map(function, data))
-        
+
         logger.info("Parallel execution completed successfully.")
 
         return results
     else:
-        logger.info("Parallel processing disabled or num_threads <= 1. Executing sequentially.")
+        logger.info(
+            "Parallel processing disabled or num_threads <= 1. Executing sequentially.")
         results = [function(item) for item in data]
         logger.info("Sequential execution completed successfully.")
-        
+
         return results
