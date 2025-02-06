@@ -1,6 +1,41 @@
+# Virtual environment
 venv/
+
+# Byte-compiled Python files
 __pycache__/
+*.py[cod]
+*$py.class
+
+# Logs and temp files
 *.log
 *.sqlite3
+*.tmp
+*.swp
+*.swo
+
+# Ignore data files (Uncomment if you don't want to commit datasets)
 # data/
 # notebooks/
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore VS Code workspace settings
+.vscode/
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore compiled C/C++ files (if any)
+*.out
+*.o
+*.a
+*.so
+
+# Ignore METIS output files
+*.metis
+
+# Ignore test reports
+coverage/
+*.cover
