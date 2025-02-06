@@ -1,6 +1,8 @@
 import random
 import logging
-from typing import Dict, Set
+from typing import Dict, Set, List
+
+from src.utils import find_connected_components
 
 # Configure module-level logger
 logger = logging.getLogger(__name__)
@@ -65,7 +67,7 @@ def get_gapless_seed(adj_list: Dict[int, Set[int]],
     # Last resort: no spatially adjacent candidate found; pick any random area.
     seed = random.choice(list(available_areas))
     logger.warning(f"No gapless seed found; selecting random area: {seed}")
-    
+
     return seed
 
 
@@ -132,7 +134,8 @@ def grow_region(adj_list: Dict[int, Set[int]],
         # Initialize the region with the seed and remove it from the temporary available areas.
         region = {seed}
         temp_available.remove(seed)
-        logger.debug(f"Started region growing with seed {seed}. Initial region: {region}")
+        logger.debug(
+            f"Started region growing with seed {seed}. Initial region: {region}")
 
         # Initialize the frontier as all unassigned neighbors of the current region.
         frontier = set()
@@ -143,7 +146,8 @@ def grow_region(adj_list: Dict[int, Set[int]],
         # Expand the region until the target cardinality is met.
         while len(region) < target_cardinality:
             if not frontier:
-                logger.debug("Frontier is empty; unable to expand region further.")
+                logger.debug(
+                    "Frontier is empty; unable to expand region further.")
                 break  # Unable to grow further; this attempt will be retried.
 
             # Randomly select the next area from the current frontier.
@@ -177,5 +181,73 @@ def grow_region(adj_list: Dict[int, Set[int]],
 
     error_msg = f"Region growth failed after {max_retries} attempts."
     logger.error(error_msg)
-    
+
     raise RuntimeError(error_msg)
+
+
+# ==============================
+# 3. Find Largest Connected Component
+# ==============================
+def find_largest_component(connected_components: List[Set[int]]) -> Set[int]:
+    """
+    Finds the largest spatially contiguous component among unassigned areas.
+
+    Parameters:
+        connected_components (List[Set[int]]): List of all connected components.
+
+    Returns:
+        Set[int]: The largest connected component.
+    """
+    if not connected_components:
+        logger.error("No connected components found.")
+        raise ValueError("No connected components found.")
+
+    largest_component = max(connected_components, key=len)
+    logger.info(
+        f"Largest connected component selected with {len(largest_component)} areas.")
+
+    return largest_component
+
+
+# ==============================
+# 4. Region Merging Phase
+# ==============================
+def merge_disconnected_areas(
+    adj_list: Dict[int, List[int]],
+    available_areas: Set[int],
+    current_region: Set[int]
+) -> Set[int]:
+    """
+    Ensures spatial contiguity by merging disconnected unassigned areas into the current region.
+
+    Parameters:
+        adj_list (Dict[int, List[int]]): The adjacency list representation of spatial areas.
+        available_areas (Set[int]): Set of unassigned areas before merging.
+        current_region (Set[int]): The region grown in Phase 1.
+
+    Returns:
+        Set[int]: The updated region after merging disconnected areas.
+    """
+    # Find spatially contiguous components of the remaining unassigned areas
+    connected_components = find_connected_components(
+        {area: adj_list[area] for area in available_areas})
+
+    if len(connected_components) <= 1:
+        logger.info(
+            "Unassigned areas are already spatially contiguous. No merging required.")
+        return current_region  # No merging needed
+
+    # Identify the largest connected component to remain as available_areas
+    largest_component = find_largest_component(connected_components)
+
+    # Identify the smaller disconnected components to merge into the current region
+    disconnected_components = [
+        comp for comp in connected_components if comp != largest_component]
+
+    for component in disconnected_components:
+        logger.info(
+            f"Merging {len(component)} areas into the current region: {component}")
+        current_region.update(component)
+        available_areas.difference_update(component)
+
+    return current_region
