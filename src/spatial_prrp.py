@@ -1,4 +1,3 @@
-from src.utils import find_connected_components, find_boundary_areas
 import random
 import logging
 from typing import Dict, Set, List
@@ -472,47 +471,103 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int]) -> L
 # ==============================
 
 
-def run_parallel_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int],
-                      solutions_count: int, num_threads: int = 1, use_multiprocessing: bool = False) -> List[List[Set[int]]]:
+def _prrp_worker(seed_value: int,
+                 areas: List[Dict[str, Any]],
+                 num_regions: int,
+                 cardinalities: List[int]) -> List[Set[int]]:
     """
-    Runs multiple independent instances of PRRP in parallel to generate multiple solutions.
+    Worker function for parallel PRRP execution. Sets a unique random seed
+    for statistical independence, executes one full PRRP solution, and returns it.
 
     Parameters:
-        areas (List[Dict]): List of spatial areas with 'id' and 'geometry'.
+        seed_value (int): The random seed for this worker.
+        areas (List[Dict[str, Any]]): List of spatial areas (each area is a dict with keys such as 'id' and 'geometry').
+        num_regions (int): The number of regions to create in this solution.
+        cardinalities (List[int]): A list specifying the target cardinality for each region.
+
+    Returns:
+        List[Set[int]]: A single PRRP solution, represented as a list of sets where each set contains area IDs for a region.
+    """
+    random.seed(seed_value)
+    logger.info(f"Worker started with seed {seed_value}.")
+    solution = run_prrp(areas, num_regions, cardinalities)
+    logger.info(f"Worker with seed {seed_value} completed a solution.")
+
+    return solution
+
+
+def run_parallel_prrp(areas: List[Dict[str, Any]],
+                      num_regions: int,
+                      cardinalities: List[int],
+                      solutions_count: int,
+                      num_threads: int = None,
+                      use_multiprocessing: bool = True) -> List[List[Set[int]]]:
+    """
+    Runs multiple independent PRRP solutions in parallel.
+
+    Parameters:
+        areas (List[Dict[str, Any]]): List of spatial areas with required attributes (e.g., 'id' and 'geometry').
         num_regions (int): Number of regions to create per solution.
         cardinalities (List[int]): List of target sizes for each region.
         solutions_count (int): Number of independent PRRP solutions to generate.
-        num_threads (int, optional): Number of parallel threads/processes to use.
-        use_multiprocessing (bool, optional): Whether to use multiprocessing.
+        num_threads (int, optional): Number of parallel threads/processes to use. If None, it defaults to min(solutions_count, cpu_count()).
+        use_multiprocessing (bool, optional): If True, uses multiprocessing; otherwise, executes sequentially.
+            Defaults to True.
 
     Returns:
-        List[List[Set[int]]]: A list of PRRP solutions, each being a list of region sets.
+        List[List[Set[int]]]: A list of PRRP solutions. Each solution is a list of sets (each set represents a region).
     """
-    def single_run(_: int) -> List[Set[int]]:
-        return run_prrp(areas, num_regions, cardinalities)
+    # Determine the number of threads/processes to use.
+    if num_threads is None:
+        num_threads = min(solutions_count, cpu_count())
+    logger.info(
+        f"Preparing to generate {solutions_count} PRRP solutions using {num_threads} parallel worker(s).")
 
-    results = parallel_execute(single_run, range(
-        solutions_count), num_threads, use_multiprocessing)
-    return results
+    # Generate unique random seeds for each solution.
+    seeds = [random.randint(0, 2**31 - 1) for _ in range(solutions_count)]
+    logger.info(
+        f"Generated {solutions_count} random seeds for PRRP solutions.")
+
+    solutions = []
+    if use_multiprocessing:
+        logger.info(
+            "Starting parallel execution of PRRP solutions using multiprocessing.")
+        with Pool(processes=num_threads) as pool:
+            # Each worker gets a unique seed, along with the areas, number of regions, and cardinalities.
+            worker_args = [(seed, areas, num_regions, cardinalities)
+                           for seed in seeds]
+            solutions = pool.starmap(_prrp_worker, worker_args)
+        logger.info("Parallel execution of PRRP solutions completed.")
+    else:
+        logger.info(
+            "Parallelization disabled; executing PRRP solutions sequentially.")
+        for seed in seeds:
+            solutions.append(_prrp_worker(
+                seed, areas, num_regions, cardinalities))
+        logger.info("Sequential execution of PRRP solutions completed.")
+
+    return solutions
 
 
 # ==============================
 # 8. Main Execution Block
 # ==============================
 if __name__ == "__main__":
-    # Example Usage
+    # Example Usage:
+    # Create dummy spatial data for testing. In practice, these would be your actual spatial areas.
     sample_areas = [
-        # Dummy geometries for testing
         {'id': i, 'geometry': None} for i in range(50)
     ]
+    # Define the number of regions and their target cardinalities.
     num_regions = 5
+    # For example, each region should have 10 areas.
     cardinalities = [10, 10, 10, 10, 10]
 
-    logger.info("Running PRRP algorithm...")
-    final_regions = run_prrp(sample_areas, num_regions, cardinalities)
-    logger.info(f"Final generated regions: {final_regions}")
+    logger.info("Running a single PRRP solution...")
+    single_solution = run_prrp(sample_areas, num_regions, cardinalities)
+    logger.info(f"Single PRRP solution: {single_solution}")
 
-    logger.info("Running parallel PRRP algorithm...")
+    logger.info("Running parallel PRRP solutions...")
     parallel_solutions = run_parallel_prrp(
-        sample_areas, num_regions, cardinalities, solutions_count=3, num_threads=2)
+        sample_areas, num_regions, cardinalities, solutions_count=3, num_threads=2, use_multiprocessing=True)
     logger.info(f"Generated parallel PRRP solutions: {parallel_solutions}")
