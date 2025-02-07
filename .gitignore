@@ -3,6 +3,7 @@ venv/
 
 # Byte-compiled Python files
 __pycache__/
+.pytest_cache/
 *.py[cod]
 *$py.class
 
