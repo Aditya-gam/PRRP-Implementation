@@ -72,7 +72,7 @@ def _has_rook_adjacency(geom1: BaseGeometry, geom2: BaseGeometry) -> bool:
     return False
 
 
-def construct_adjacency_list(areas: Any) -> Dict[Any, List[Any]]:
+def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
     """
     Creates a graph adjacency list using rook adjacency (i.e., regions that share a boundary).
 
@@ -87,10 +87,10 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, List[Any]]:
         areas (GeoDataFrame or list): Spatial areas with geometry information.
 
     Returns:
-        Dict[Any, List[Any]]: A dictionary mapping each area identifier to a list of
+        Dict[Any, Set[Any]]: A dictionary mapping each area identifier to a set of
                               spatially contiguous (adjacent) area identifiers.
     """
-    adj_list: Dict[Any, List[Any]] = {}
+    adj_list: Dict[Any, Set[Any]] = {}
 
     if isinstance(areas, gpd.GeoDataFrame):
         try:
@@ -101,7 +101,7 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, List[Any]]:
 
         for idx, area in areas.iterrows():
             geom = area.geometry
-            adj_list[idx] = []
+            adj_list[idx] = set()
             possible_matches_index = list(sindex.intersection(geom.bounds))
 
             for other_idx in possible_matches_index:
@@ -109,16 +109,16 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, List[Any]]:
                     continue
                 other_geom = areas.loc[other_idx].geometry
                 if _has_rook_adjacency(geom, other_geom):
-                    adj_list[idx].append(other_idx)
+                    adj_list[idx].add(other_idx)
     elif isinstance(areas, list):
         # Check if all areas have 'geometry' set to None (dummy data)
         if all(area.get('geometry') is None for area in areas):
             # Construct a complete graph: every area is adjacent to every other area.
             for area in areas:
                 area_id = area.get('id')
-                # Exclude self from the list of neighbors.
-                adj_list[area_id] = [
-                    other.get('id') for other in areas if other.get('id') != area_id]
+                # Exclude self from the set of neighbors.
+                adj_list[area_id] = {
+                    other.get('id') for other in areas if other.get('id') != area_id}
             logger.info(
                 "Adjacency list constructed as a complete graph (dummy geometry).")
             return adj_list
@@ -132,7 +132,7 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, List[Any]]:
                 if geom_i is None:
                     logger.error(f"Area with id {id_i} has no geometry.")
                     raise ValueError(f"Area with id {id_i} has no geometry.")
-                adj_list[id_i] = []
+                adj_list[id_i] = set()
                 for j in range(n):
                     if i == j:
                         continue
@@ -144,7 +144,7 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, List[Any]]:
                         raise ValueError(
                             f"Area with id {id_j} has no geometry.")
                     if _has_rook_adjacency(geom_i, geom_j):
-                        adj_list[id_i].append(id_j)
+                        adj_list[id_i].add(id_j)
             logger.info(
                 "Adjacency list constructed successfully based on geometries.")
     else:
