@@ -9,11 +9,14 @@ and performs robust error handling.
 The function returns a tuple:
     (adjacency_list, num_nodes, num_edges)
 
-Example METIS header formats:
-    Unweighted:      "4 6"
-    Weighted:        "4 6 011"       -> (vertex weights absent, edge weights present)
-    With vertex weights (ncon provided): "4 6 101 2"
-    
+The file is expected to support comment lines (starting with '%') and empty lines.
+It supports graphs with vertex weights, edge weights, or both.
+If vertex weights are present, the first ncon tokens in each vertex line are skipped.
+If edge weights are present, remaining tokens are expected in pairs (neighbor, weight)
+and only the neighbor (converted to 0-based index) is stored.
+For unweighted graphs, each token (after skipping vertex weights if applicable)
+is interpreted as a neighbor.
+
 Refer to Section 4.1.1 of the METIS Manual for details.
 """
 
@@ -45,6 +48,7 @@ def load_graph_from_metis(file_path: str) -> Tuple[Dict[int, List[int]], int, in
       - For unweighted graphs, each token (after skipping vertex weights if applicable)
         is interpreted as a neighbor.
       - Conversion from 1-based indexing to 0-based indexing.
+      - Self-loop prevention (ignoring edges from a node to itself).
 
     Parameters:
         file_path (str): Path to the METIS graph file.
@@ -52,7 +56,6 @@ def load_graph_from_metis(file_path: str) -> Tuple[Dict[int, List[int]], int, in
     Returns:
         Tuple[Dict[int, List[int]], int, int]:
             - adjacency_list: A dictionary mapping each vertex (0-based) to a list of neighbor vertices.
-              (Edge weights, if present, are ignored for connectivity purposes.)
             - num_nodes: Total number of nodes.
             - num_edges: Total number of undirected edges.
 
@@ -97,7 +100,7 @@ def load_graph_from_metis(file_path: str) -> Tuple[Dict[int, List[int]], int, in
     # Determine if weights are provided
     vertex_weights = False
     edge_weights = False
-    ncon = 1  # default: one vertex weight per vertex if weights are provided
+    ncon = 1  # Default: one vertex weight per vertex if weights are provided
     if len(header_tokens) >= 3:
         fmt = header_tokens[2]
         if len(fmt) >= 1:
@@ -112,14 +115,15 @@ def load_graph_from_metis(file_path: str) -> Tuple[Dict[int, List[int]], int, in
                 logger.error("Invalid ncon value in header.")
                 raise ValueError("Invalid ncon in header.") from e
 
-    adjacency_list = {}
-
+    # Check if there are enough vertex lines
     if len(content_lines) - 1 < num_nodes:
         logger.error(
             "The number of vertex lines in the file is less than the expected number of nodes.")
         raise ValueError("Insufficient vertex lines in METIS file.")
 
-    # Process each vertex line (vertices are expected in order; lines[1] is vertex 1, etc.)
+    adjacency_list: Dict[int, List[int]] = {}
+
+    # Process each vertex line (vertices are expected in order; content_lines[1] is vertex 1, etc.)
     for i in range(num_nodes):
         line = content_lines[i + 1]
         tokens = line.split()
@@ -134,10 +138,9 @@ def load_graph_from_metis(file_path: str) -> Tuple[Dict[int, List[int]], int, in
                     f"Insufficient vertex weight tokens for vertex {i + 1}.")
             token_index += ncon
 
-        neighbors = []
+        neighbors: List[int] = []
         # Process remaining tokens
         if edge_weights:
-            # Expect pairs: (neighbor, weight). Validate that there is an even number of tokens.
             remaining_tokens = tokens[token_index:]
             if len(remaining_tokens) % 2 != 0:
                 logger.error(
@@ -146,25 +149,28 @@ def load_graph_from_metis(file_path: str) -> Tuple[Dict[int, List[int]], int, in
                     f"Edge weights tokens count error in vertex {i + 1}.")
             for j in range(0, len(remaining_tokens), 2):
                 try:
-                    # Only neighbor is stored; subtract 1 for 0-based indexing.
+                    # Convert to 0-based index
                     neighbor = int(remaining_tokens[j]) - 1
                 except Exception as e:
                     logger.error(
                         f"Vertex {i + 1}: Invalid neighbor token '{remaining_tokens[j]}'.")
                     raise ValueError(
                         f"Invalid neighbor token in vertex {i + 1}.") from e
-                neighbors.append(neighbor)
+                # Avoid self-loop
+                if neighbor != i:
+                    neighbors.append(neighbor)
         else:
-            # Unweighted graph: each token represents a neighbor.
             for token in tokens[token_index:]:
                 try:
-                    neighbor = int(token) - 1
+                    neighbor = int(token) - 1  # Convert to 0-based index
                 except Exception as e:
                     logger.error(
                         f"Vertex {i + 1}: Invalid neighbor token '{token}'.")
                     raise ValueError(
                         f"Invalid neighbor token in vertex {i + 1}.") from e
-                neighbors.append(neighbor)
+                # Avoid self-loop
+                if neighbor != i:
+                    neighbors.append(neighbor)
 
         # Validate neighbor indices
         for neighbor in neighbors:
@@ -177,8 +183,6 @@ def load_graph_from_metis(file_path: str) -> Tuple[Dict[int, List[int]], int, in
         adjacency_list[i] = neighbors
 
     # Determine the final number of edges.
-    # Note: METIS header edge count (header_edge_count) may refer to undirected edges.
-    # We compute the total number of neighbor entries.
     total_neighbor_entries = sum(len(neigh)
                                  for neigh in adjacency_list.values())
     if total_neighbor_entries == header_edge_count:
@@ -186,7 +190,6 @@ def load_graph_from_metis(file_path: str) -> Tuple[Dict[int, List[int]], int, in
     elif total_neighbor_entries == 2 * header_edge_count:
         final_num_edges = header_edge_count
     else:
-        # Fall back to computing half the sum (assuming undirected double-listing)
         final_num_edges = total_neighbor_entries // 2
         logger.warning(
             f"Computed total neighbor entries ({total_neighbor_entries}) do not match the header edge count ({header_edge_count}). "
