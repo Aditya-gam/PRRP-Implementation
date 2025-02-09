@@ -58,7 +58,7 @@ def get_gapless_seed(adj_list: Dict[int, Set[int]],
 
     candidate_seeds = set()
     for area in assigned_regions:
-        neighbors = adj_list.get(area, set())
+        neighbors = set(adj_list.get(area, set()))
         candidate_seeds.update(neighbors.intersection(available_areas))
 
     if candidate_seeds:
@@ -134,7 +134,7 @@ def grow_region(adj_list: Dict[int, Set[int]],
 
         frontier = set()
         for area in region:
-            neighbors = adj_list.get(area, set())
+            neighbors = set(adj_list.get(area, set()))
             frontier.update(neighbors.intersection(temp_available))
 
         while len(region) < target_cardinality:
@@ -151,7 +151,7 @@ def grow_region(adj_list: Dict[int, Set[int]],
 
             frontier.clear()
             for area in region:
-                neighbors = adj_list.get(area, set())
+                neighbors = set(adj_list.get(area, set()))
                 frontier.update(neighbors.intersection(temp_available))
 
         if len(region) == target_cardinality:
@@ -231,7 +231,7 @@ def merge_disconnected_areas(
 
     # Create a subgraph from available areas, ensuring only edges between available areas are retained.
     sub_adj: Dict[int, List[int]] = {
-        area: list(adj_list.get(area, set()) & available_areas) for area in available_areas
+        area: list(set(adj_list.get(area, set())) & available_areas) for area in available_areas
     }
 
     # Find connected components in the subgraph using the utility function.
