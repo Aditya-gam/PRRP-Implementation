@@ -411,12 +411,13 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int]) -> L
         raise ValueError(
             "Number of regions must match the length of the cardinalities list.")
 
-    # Construct adjacency list for spatial relationships
+    # Construct adjacency list for spatial relationships.
     adj_list = construct_adjacency_list(areas)
-    # Ensure that all neighbor values are sets (in case they were deserialized as lists)
+    # Ensure that all neighbor values are sets.
     adj_list = {k: set(v) for k, v in adj_list.items()}
     available_areas = set(adj_list.keys())
 
+    # Sort cardinalities in descending order.
     cardinalities.sort(reverse=True)
 
     regions = []
@@ -424,11 +425,17 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int]) -> L
         logger.info(f"Growing region with target size: {target_cardinality}")
 
         try:
+            # Grow the region.
             region = grow_region(adj_list, available_areas, target_cardinality)
-            merged_region = merge_disconnected_areas(
-                adj_list, available_areas, region)
-            final_region = split_region(
-                merged_region, target_cardinality, adj_list)
+            # Only perform merge/split if there remain unassigned areas.
+            if available_areas:
+                merged_region = merge_disconnected_areas(
+                    adj_list, available_areas, region)
+                final_region = split_region(
+                    merged_region, target_cardinality, adj_list)
+            else:
+                # If no areas remain unassigned, no merge or split is needed.
+                final_region = region
             regions.append(final_region)
             logger.info(f"Region finalized with {len(final_region)} areas.")
         except Exception as e:
@@ -436,6 +443,7 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int]) -> L
             return []  # Return an empty result indicating failure
 
     return regions
+
 
 # ==============================
 # 7. Parallel Execution of PRRP
