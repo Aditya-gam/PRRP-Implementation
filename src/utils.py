@@ -186,12 +186,22 @@ def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
           1. It is the root of the DFS tree and has more than one child.
           2. It is not the root and for some child v, low[v] >= disc[node].
       - Runs in O(V + E) time.
+
+    Note:
+      - For large graphs, the recursion depth may exceed Python's default limit.
+      - This implementation temporarily increases the recursion limit to handle deep DFS trees.
     """
+    import sys
+    old_limit = sys.getrecursionlimit()
+    # Increase recursion limit (adjust the value if needed)
+    new_limit = max(old_limit, 15000)
+    sys.setrecursionlimit(new_limit)
+
     disc: Dict[Any, int] = {}
     low: Dict[Any, int] = {}
     parent: Dict[Any, Any] = {}
     ap: Set[Any] = set()
-    time = [0]  # Use list for mutable integer
+    time = [0]  # Using a list so that the integer is mutable
 
     def dfs(u: Any) -> None:
         nonlocal time
@@ -220,6 +230,8 @@ def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
             parent[u] = None
             dfs(u)
 
+    # Restore the original recursion limit
+    sys.setrecursionlimit(old_limit)
     logger.info(f"Found articulation points: {ap}")
     return ap
 
