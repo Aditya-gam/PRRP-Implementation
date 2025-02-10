@@ -5,7 +5,7 @@ Unit tests for the P-Regionalization through Recursive Partitioning (PRRP)
 algorithm utilities. The tests cover:
     - Graph construction using rook adjacency (GeoDataFrame and list inputs)
     - Connected component detection
-    - Articulation point identification via Tarjan’s Algorithm
+    - Articulation point identification via Tarjan’s Algorithm (both via is_articulation_point and find_articulation_points)
     - Removal of articulation areas with connectivity reassignment
     - Gapless random seed selection
     - METIS file loading and saving
@@ -27,10 +27,13 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Polygon
 
+# Import functions from your src/utils.py module.
+# Adjust the import path if necessary (e.g., if your project structure differs).
 from src.utils import (
     construct_adjacency_list,
     find_connected_components,
     is_articulation_point,
+    find_articulation_points,
     remove_articulation_area,
     random_seed_selection,
     load_graph_from_metis,
@@ -40,6 +43,7 @@ from src.utils import (
     parallel_execute,
     PARALLEL_PROCESSING_ENABLED,
 )
+
 
 # -----------------------------
 # Helper Functions and Fixtures
@@ -55,8 +59,8 @@ def create_test_geodataframe() -> gpd.GeoDataFrame:
     poly2 = Polygon([(1, 0), (2, 0), (2, 1), (1, 1)])  # adjacent to poly1
     poly3 = Polygon([(3, 0), (4, 0), (4, 1), (3, 1)])    # isolated
     gdf = gpd.GeoDataFrame({'geometry': [poly1, poly2, poly3]})
-
     return gdf
+
 
 @pytest.fixture
 def metis_file(tmp_path) -> str:
@@ -71,8 +75,8 @@ def metis_file(tmp_path) -> str:
     content = "4 3\n2 3\n1 4\n1\n2\n"
     file_path = tmp_path / "test.metis"
     file_path.write_text(content)
-
     return str(file_path)
+
 
 # -----------------------------
 # Tests for construct_adjacency_list
@@ -81,20 +85,29 @@ def metis_file(tmp_path) -> str:
 def test_construct_adjacency_list_geodataframe():
     """
     Test adjacency list creation using a GeoDataFrame with rook adjacency.
-    Ensures that adjacent regions are correctly detected.
+    Verifies that:
+      - Adjacent regions are correctly detected.
+      - The output values are sets.
+      - Isolated regions yield an empty set.
     """
     gdf = create_test_geodataframe()
     adj_list = construct_adjacency_list(gdf)
+    # Since the function now returns sets, verify using set membership.
+    # Expect polygon 0 and 1 to be adjacent.
+    assert (1 in adj_list[0] or 0 in adj_list[1]
+            ), "Adjacent regions not detected correctly."
+    # The isolated polygon (index 2) should have an empty set.
+    assert adj_list[2] == set(
+    ), "Isolated region should have an empty neighbor set."
 
-    # Check that polygon 0 and 1 are adjacent (sharing a common edge).
-    assert (1 in adj_list[0] or 0 in adj_list[1]), "Adjacent regions not detected correctly."
-
-    # Check that the isolated polygon (index 2) has no neighbors.
-    assert adj_list[2] == [], "Isolated region should have an empty neighbor list."
 
 def test_construct_adjacency_list_list():
     """
     Test adjacency list creation using a list of dict-like objects.
+    Verifies that:
+      - Adjacent areas are detected correctly.
+      - Output neighbor lists are converted to sets.
+      - Isolated areas yield an empty set.
     """
     poly1 = Polygon([(0, 0), (1, 0), (1, 1), (0, 1)])
     poly2 = Polygon([(1, 0), (2, 0), (2, 1), (1, 1)])
@@ -105,12 +118,24 @@ def test_construct_adjacency_list_list():
         {'id': 'c', 'geometry': poly3},
     ]
     adj_list = construct_adjacency_list(areas)
-
     # 'a' and 'b' should be adjacent.
-    assert ('b' in adj_list['a'] or 'a' in adj_list['b']), "Adjacent areas not detected in list input."
-
+    assert ('b' in adj_list['a'] or 'a' in adj_list['b']
+            ), "Adjacent areas not detected in list input."
     # 'c' should be isolated.
-    assert adj_list['c'] == [], "Isolated area should have no neighbors."
+    assert adj_list['c'] == set(), "Isolated area should have no neighbors."
+
+
+def test_construct_adjacency_list_preconstructed_dict():
+    """
+    Test that if a pre-constructed dictionary is provided, the function converts neighbor lists to sets.
+    """
+    input_dict = {1: [2, 3], 2: [1], 3: [1]}
+    adj_list = construct_adjacency_list(input_dict)
+    assert isinstance(
+        adj_list[1], set), "Neighbor list should be converted to a set."
+    assert adj_list[1] == {
+        2, 3}, "Pre-constructed adjacency not preserved correctly."
+
 
 # -----------------------------
 # Tests for find_connected_components
@@ -123,6 +148,7 @@ def test_find_connected_components_simple():
         0 -- 1 -- 2
         3 (isolated)
     """
+    # Using a dictionary with list values is acceptable.
     adj_list = {
         0: [1],
         1: [0, 2],
@@ -131,10 +157,10 @@ def test_find_connected_components_simple():
     }
     components = find_connected_components(adj_list)
     expected = [{0, 1, 2}, {3}]
-
     assert len(components) == 2, "Should identify two connected components"
-    
-    assert set(map(frozenset, components)) == set(map(frozenset, expected)), "Component structure mismatch"
+    assert set(map(frozenset, components)) == set(
+        map(frozenset, expected)), "Component structure mismatch"
+
 
 def test_find_connected_components_multiple():
     """
@@ -147,10 +173,44 @@ def test_find_connected_components_multiple():
         'D': ['C']
     }
     components = find_connected_components(adj_list)
-    
-    assert any(component == {'A', 'B'} for component in components), "Component {'A','B'} not detected."
-    
-    assert any(component == {'C', 'D'} for component in components), "Component {'C','D'} not detected."
+    assert any(component == {'A', 'B'}
+               for component in components), "Component {'A','B'} not detected."
+    assert any(component == {'C', 'D'}
+               for component in components), "Component {'C','D'} not detected."
+
+
+# -----------------------------
+# Tests for find_articulation_points (New)
+# -----------------------------
+
+def test_find_articulation_points():
+    """
+    Test computation of articulation points using Tarjan's Algorithm.
+    Graph:
+           1
+          / \
+         2   3
+          \ /
+           4
+          / \
+         5   6
+    In this graph, node 4 is an articulation point.
+    """
+    # Represent graph as an adjacency list with list values.
+    graph = {
+        1: [2, 3],
+        2: [1, 4],
+        3: [1, 4],
+        4: [2, 3, 5, 6],
+        5: [4],
+        6: [4]
+    }
+    aps = find_articulation_points(graph)
+    assert 4 in aps, "Node 4 should be identified as an articulation point."
+    # Nodes 1,2,3,5,6 should not be articulation points.
+    for node in [1, 2, 3, 5, 6]:
+        assert node not in aps, f"Node {node} should not be an articulation point."
+
 
 # -----------------------------
 # Tests for is_articulation_point
@@ -159,15 +219,16 @@ def test_find_connected_components_multiple():
 def test_is_articulation_point_positive():
     """
     Test that a known articulation point is detected.
-    Graph: 1 -- 2 -- 3, node 2 is an articulation point.
+    Graph: 1 -- 2 -- 3, where node 2 is an articulation point.
     """
     adj_list = {
         1: [2],
         2: [1, 3],
         3: [2]
     }
-    
-    assert is_articulation_point(adj_list, 2), "Node 2 should be identified as an articulation point."
+    assert is_articulation_point(
+        adj_list, 2), "Node 2 should be identified as an articulation point."
+
 
 def test_is_articulation_point_negative():
     """
@@ -178,10 +239,11 @@ def test_is_articulation_point_negative():
         2: [1, 3],
         3: [2]
     }
-    
-    assert not is_articulation_point(adj_list, 1), "Leaf node 1 should not be an articulation point."
-    
-    assert not is_articulation_point(adj_list, 3), "Leaf node 3 should not be an articulation point."
+    assert not is_articulation_point(
+        adj_list, 1), "Leaf node 1 should not be an articulation point."
+    assert not is_articulation_point(
+        adj_list, 3), "Leaf node 3 should not be an articulation point."
+
 
 def test_is_articulation_point_boundary():
     """
@@ -195,14 +257,12 @@ def test_is_articulation_point_boundary():
         3: [1, 2],
         4: [2]
     }
-    
-    assert is_articulation_point(adj_list, 2), "Node 2 should be an articulation point."
-    
-    assert not is_articulation_point(adj_list, 1), "Node 1 should not be an articulation point."
-    
-    assert not is_articulation_point(adj_list, 3), "Node 3 should not be an articulation point."
-    
-    assert not is_articulation_point(adj_list, 4), "Leaf node 4 should not be an articulation point."
+    assert is_articulation_point(
+        adj_list, 2), "Node 2 should be an articulation point."
+    for node in [1, 3, 4]:
+        assert not is_articulation_point(
+            adj_list, node), f"Node {node} should not be an articulation point."
+
 
 # -----------------------------
 # Tests for remove_articulation_area
@@ -220,14 +280,14 @@ def test_remove_articulation_area():
         3: [2]
     }
     new_adj = remove_articulation_area(adj_list, 2)
-    
-    # Node 2 should be present in the new adjacency list and have at least one neighbor.
+    # Verify that node 2 is present in the updated adjacency list (as reassigned).
     assert 2 in new_adj, "Removed node 2 should be reassigned in the new adjacency list."
-    
+    # Check that the new adjacency for node 2 is non-empty.
     assert new_adj[2], "Reassigned node 2 should have at least one neighbor."
-    
+    # Verify bidirectional connectivity.
     neighbor = new_adj[2][0]
     assert 2 in new_adj[neighbor], "Reassigned node 2 must appear in its neighbor's list."
+
 
 def test_remove_articulation_area_no_disconnect():
     """
@@ -240,10 +300,9 @@ def test_remove_articulation_area_no_disconnect():
         3: [1, 2]
     }
     new_adj = remove_articulation_area(adj_list, 1)
-    
     assert 1 in new_adj, "Removed node 1 should be reassigned in the new adjacency list."
-    
     assert new_adj[1], "Reassigned node 1 should have neighbors."
+
 
 # -----------------------------
 # Tests for random_seed_selection
@@ -262,9 +321,10 @@ def test_random_seed_selection_gapless():
     }
     assigned_regions = {1}
     seed = random_seed_selection(adj_list, assigned_regions, method="gapless")
-    
     # For region 1, the only neighbor is 2.
-    assert seed in {2} or seed in set(adj_list.keys()), "Seed selection did not return a valid node."
+    assert seed in {2} or seed in set(
+        adj_list.keys()), "Seed selection did not return a valid node."
+
 
 def test_random_seed_selection_no_assigned():
     """
@@ -277,14 +337,15 @@ def test_random_seed_selection_no_assigned():
     }
     assigned_regions = set()
     seed = random_seed_selection(adj_list, assigned_regions, method="gapless")
-    
-    assert seed in set(adj_list.keys()), "Seed should be selected from all available nodes when none are assigned."
+    assert seed in set(adj_list.keys(
+    )), "Seed should be selected from all available nodes when none are assigned."
+
 
 def test_random_seed_selection_no_valid_candidate():
     """
     Test random seed selection when no candidate meets the gapless criteria.
     """
-    # Create a graph where assigned regions have no unassigned neighbors.
+    # Create a graph where the assigned regions have no unassigned neighbors.
     adj_list = {
         1: [2],
         2: [1],
@@ -292,9 +353,9 @@ def test_random_seed_selection_no_valid_candidate():
     }
     assigned_regions = {1, 2}
     seed = random_seed_selection(adj_list, assigned_regions, method="gapless")
-   
     # The only unassigned node is 3.
     assert seed == 3, "Seed should be the only unassigned node (3)."
+
 
 # -----------------------------
 # Tests for load_graph_from_metis
@@ -311,8 +372,8 @@ def test_load_graph_from_metis_valid(metis_file):
         3: [1],
         4: [2]
     }
-    
     assert adj_list == expected, "Loaded adjacency list does not match expected output."
+
 
 def test_load_graph_from_metis_empty(tmp_path):
     """
@@ -320,9 +381,9 @@ def test_load_graph_from_metis_empty(tmp_path):
     """
     file_path = tmp_path / "empty.metis"
     file_path.write_text("")
-    
     with pytest.raises(ValueError):
         load_graph_from_metis(str(file_path))
+
 
 def test_load_graph_from_metis_invalid_header(tmp_path):
     """
@@ -331,9 +392,9 @@ def test_load_graph_from_metis_invalid_header(tmp_path):
     content = "invalid header\n2 3\n1 4\n1\n2\n"
     file_path = tmp_path / "invalid.metis"
     file_path.write_text(content)
-    
     with pytest.raises(ValueError):
         load_graph_from_metis(str(file_path))
+
 
 # -----------------------------
 # Tests for save_graph_to_metis
@@ -352,12 +413,12 @@ def test_save_graph_to_metis(tmp_path):
     file_path = tmp_path / "output.metis"
     save_graph_to_metis(str(file_path), adj_list)
     content = file_path.read_text().strip().splitlines()
-    
     # Expected header: "4 3" (4 nodes, 3 edges)
-    assert content[0].strip() == "4 3", "METIS header does not match expected output."
-    
+    assert content[0].strip(
+    ) == "4 3", "METIS header does not match expected output."
     # There should be 1 header line plus 4 lines for each node.
     assert len(content) == 5, "Incorrect number of lines in METIS file output."
+
 
 # -----------------------------
 # Tests for find_boundary_areas
@@ -376,9 +437,9 @@ def test_find_boundary_areas():
     }
     region = {1, 2}
     boundaries = find_boundary_areas(region, adj_list)
-    
-    # Node 1's only neighbor is 2 (inside region); node 2 has neighbor 3 (outside).
+    # Node 1's only neighbor is 2 (inside the region); node 2 has neighbor 3 (outside).
     assert boundaries == {2}, "Boundary area detection failed."
+
 
 # -----------------------------
 # Tests for calculate_low_link_values
@@ -395,11 +456,11 @@ def test_calculate_low_link_values():
         3: [2]
     }
     disc, low = calculate_low_link_values(adj_list)
-    
     for node in adj_list:
         assert node in disc, f"Node {node} missing in discovery times."
         assert node in low, f"Node {node} missing in low-link values."
         assert low[node] <= disc[node], f"Low-link value for node {node} is inconsistent."
+
 
 # -----------------------------
 # Tests for parallel_execute
@@ -417,14 +478,14 @@ def test_parallel_execute_threading():
 
     results_seq = parallel_execute(double, data, num_threads=1)
     original_flag = PARALLEL_PROCESSING_ENABLED
-    
     try:
         globals()['PARALLEL_PROCESSING_ENABLED'] = True
-        results_thread = parallel_execute(double, data, num_threads=4, use_multiprocessing=False)
-        
+        results_thread = parallel_execute(
+            double, data, num_threads=4, use_multiprocessing=False)
         assert results_seq == results_thread, "Threaded parallel execution output differs from sequential."
     finally:
         globals()['PARALLEL_PROCESSING_ENABLED'] = original_flag
+
 
 def test_parallel_execute_multiprocessing():
     """
@@ -438,11 +499,10 @@ def test_parallel_execute_multiprocessing():
 
     results_seq = parallel_execute(triple, data, num_threads=1)
     original_flag = PARALLEL_PROCESSING_ENABLED
-    
     try:
         globals()['PARALLEL_PROCESSING_ENABLED'] = True
-        results_mp = parallel_execute(triple, data, num_threads=4, use_multiprocessing=True)
-        
+        results_mp = parallel_execute(
+            triple, data, num_threads=4, use_multiprocessing=True)
         assert results_seq == results_mp, "Multiprocessing parallel execution output differs from sequential."
     finally:
         globals()['PARALLEL_PROCESSING_ENABLED'] = original_flag

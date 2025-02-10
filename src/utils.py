@@ -9,6 +9,7 @@ Functions:
     - construct_adjacency_list(areas)
     - find_connected_components(adj_list)
     - is_articulation_point(adj_list, node)
+    - find_articulation_points(G)
     - remove_articulation_area(adj_list, node)
     - random_seed_selection(adj_list, assigned_regions, method="gapless")
     - load_graph_from_metis(file_path)
@@ -37,7 +38,6 @@ logger.setLevel(logging.DEBUG)  # Adjust as needed.
 handler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 handler.setFormatter(formatter)
-
 if not logger.handlers:
     logger.addHandler(handler)
 
@@ -76,33 +76,36 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
     """
     Creates a graph adjacency list using rook adjacency (i.e., regions that share a boundary).
 
-    This function supports input as a GeoDataFrame (from geopandas) or a list of objects that have
-    at least 'geometry' and an identifier (accessible via index or attribute). 
-
-    For list inputs, if all areas have 'geometry' set to None (as is common in test/dummy data),
-    the function constructs a complete graph (i.e., every area is adjacent to every other area)
-    to allow the algorithm to run without errors.
+    This function supports input in three forms:
+      1. A pre-constructed adjacency list (dictionary) – in which case it converts each neighbor list to a set.
+      2. A GeoDataFrame (spatial PRRP) – uses the spatial index and geometry intersections to determine adjacency.
+      3. A list of dictionaries (custom spatial data) – if all areas have 'geometry' set to None, it creates a complete graph;
+         otherwise, it computes adjacency based on the provided geometries.
 
     Parameters:
-        data (Any): Input data, which can be:
-                    - GeoDataFrame (spatial PRRP) 
-                    - Graph adjacency list (graph PRRP)
-        is_graph (bool): Whether the input is a graph (True) or spatial data (False).
+        areas (GeoDataFrame, list, or dict): Spatial areas with geometry information or a pre-built adjacency list.
 
     Returns:
-        Dict[Any, Set[Any]]: Adjacency list representation.
+        Dict[Any, Set[Any]]: A dictionary mapping each area identifier to a set of adjacent area identifiers.
+
+    Raises:
+        TypeError: If the input is not a GeoDataFrame, list, or dictionary.
+        ValueError: If a required geometry is missing.
     """
+    # Case 1: Input is already a dictionary (graph-based PRRP)
+    if isinstance(areas, dict):
+        new_adj_list = {}
+        for key, value in areas.items():
+            # Ensure that each neighbor list is a set
+            new_adj_list[key] = value if isinstance(value, set) else set(value)
+        logger.info(
+            "Input is a dictionary; returning pre-constructed adjacency list.")
+        return new_adj_list
+
     adj_list: Dict[Any, Set[Any]] = {}
 
-    # Case 1: Graph-Based PRRP (Standard Adjacency List)
-    if isinstance(areas, dict):
-        for node, neighbors in areas.items():
-            # Convert lists to sets for efficiency
-            adj_list[node] = set(neighbors)
-        return adj_list
-
-    # Case 2: Spatial PRRP (GeoDataFrame Handling)
-    elif isinstance(areas, gpd.GeoDataFrame):
+    # Case 2: Input is a GeoDataFrame (spatial PRRP)
+    if isinstance(areas, gpd.GeoDataFrame):
         try:
             sindex = areas.sindex
         except Exception as e:
@@ -112,30 +115,26 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
         for idx, area in areas.iterrows():
             geom = area.geometry
             adj_list[idx] = set()
-            possible_matches_index = list(sindex.intersection(geom.bounds))
-
-            for other_idx in possible_matches_index:
+            possible_matches = list(sindex.intersection(geom.bounds))
+            for other_idx in possible_matches:
                 if other_idx == idx:
                     continue
                 other_geom = areas.loc[other_idx].geometry
                 if _has_rook_adjacency(geom, other_geom):
                     adj_list[idx].add(other_idx)
 
-    # Case 3: List of Dictionaries (Custom Geometry Handling)
+    # Case 3: Input is a list of dictionaries (custom spatial data)
     elif isinstance(areas, list):
-        # Check if all areas have 'geometry' set to None (dummy data)
+        # If all areas lack geometry, construct a complete graph.
         if all(area.get('geometry') is None for area in areas):
-            # Construct a complete graph: every area is adjacent to every other area.
             for area in areas:
                 area_id = area.get('id')
-                # Exclude self from the set of neighbors.
                 adj_list[area_id] = {
                     other.get('id') for other in areas if other.get('id') != area_id}
             logger.info(
                 "Adjacency list constructed as a complete graph (dummy geometry).")
             return adj_list
         else:
-            # Use provided geometries to determine spatial relationships.
             n = len(areas)
             for i in range(n):
                 area_i = areas[i]
@@ -161,9 +160,9 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
                 "Adjacency list constructed successfully based on geometries.")
     else:
         logger.error(
-            "Unsupported type for areas. Expected GeoDataFrame or list.")
+            "Unsupported type for areas. Expected GeoDataFrame, list, or dict.")
         raise TypeError(
-            "Unsupported type for areas. Expected GeoDataFrame or list.")
+            "Unsupported type for areas. Expected GeoDataFrame, list, or dict.")
 
     return adj_list
 
@@ -179,68 +178,61 @@ def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
         Set[int]: Set of articulation points.
 
     Explanation:
-    - Uses DFS to explore the graph while maintaining:
-        - `disc`: Discovery time of each node.
-        - `low`: Lowest discovery time reachable from a node.
-        - `parent`: Parent tracking for DFS traversal.
-    - A node is an articulation point if:
-        1. It is the root with two or more independent DFS subtrees.
-        2. It has a child where `low[child] ≥ disc[node]` (meaning no back-edge reconnecting to an ancestor).
-    - Runs in **O(V + E) time complexity**, making it efficient for large graphs.
+      - The function uses DFS to explore the graph while maintaining:
+          - `disc`: Discovery time for each node.
+          - `low`: The lowest discovery time reachable from that node.
+          - `parent`: The parent of each node in the DFS tree.
+      - A node is considered an articulation point if:
+          1. It is the root of the DFS tree and has more than one child.
+          2. It is not the root and for some child v, low[v] >= disc[node].
+      - Runs in O(V + E) time.
     """
+    disc: Dict[Any, int] = {}
+    low: Dict[Any, int] = {}
+    parent: Dict[Any, Any] = {}
+    ap: Set[Any] = set()
+    time = [0]  # Use list for mutable integer
 
-    # Initialize structures
-    disc = {}  # Discovery time
-    low = {}   # Lowest reachable discovery time
-    parent = {}  # Parent tracker for DFS tree
-    ap = set()  # Store articulation points
-    time = [0]  # Mutable counter to track discovery order
-
-    def dfs(u):
-        """
-        DFS traversal to find articulation points.
-        """
+    def dfs(u: Any) -> None:
+        nonlocal time
         children = 0
         disc[u] = low[u] = time[0]
         time[0] += 1
 
         for v in G[u]:
-            if v not in disc:  # If v is not visited
+            if v not in disc:
                 parent[v] = u
                 children += 1
                 dfs(v)
-
-                # Update low-link value
                 low[u] = min(low[u], low[v])
 
-                # Case 1: Root node with multiple independent DFS subtrees
-                if u not in parent and children > 1:
+                # Case 1: Root with multiple children
+                if parent.get(u) is None and children > 1:
                     ap.add(u)
-
-                # Case 2: Non-root node where a child's subtree cannot reach an ancestor of u
-                if u in parent and low[v] >= disc[u]:
+                # Case 2: Non-root where no back-edge exists from v's subtree to an ancestor of u
+                if parent.get(u) is not None and low[v] >= disc[u]:
                     ap.add(u)
-
-            elif v != parent.get(u, None):  # Back-edge case (ignore edge to parent)
+            elif v != parent.get(u, None):
                 low[u] = min(low[u], disc[v])
 
-    # Run DFS for all components
-    for node in G:
-        if node not in disc:
-            dfs(node)
+    for u in G:
+        if u not in disc:
+            parent[u] = None
+            dfs(u)
 
-    return ap  # Return set of articulation points
+    logger.info(f"Found articulation points: {ap}")
+    return ap
 
 
 def find_connected_components(adj_list: Dict[Any, List[Any]]) -> List[Set[Any]]:
     """
-    Finds all spatially connected components in a graph using depth-first search (DFS).
+    Finds all connected components in a graph using DFS.
 
     Parameters:
         adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
 
     Returns:
-        List[Set[Any]]: A list of sets, where each set contains spatially connected nodes.
+        List[Set[Any]]: A list of sets, where each set contains nodes in one connected component.
     """
     visited: Set[Any] = set()
     components: List[Set[Any]] = []
@@ -249,35 +241,30 @@ def find_connected_components(adj_list: Dict[Any, List[Any]]) -> List[Set[Any]]:
         if node not in visited:
             component: Set[Any] = set()
             stack: List[Any] = [node]
-
             while stack:
                 n = stack.pop()
-
                 if n not in visited:
                     visited.add(n)
                     component.add(n)
-
                     for neighbor in adj_list.get(n, []):
                         if neighbor not in visited:
                             stack.append(neighbor)
-
             components.append(component)
 
     logger.info(f"Found {len(components)} connected component(s).")
-
     return components
 
 
 def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
     """
-    Determines if a given node is an articulation point in the graph using Tarjan's Algorithm.
+    Determines if a given node is an articulation point using Tarjan's Algorithm.
 
     Parameters:
         adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
         node (Any): The node to check.
 
     Returns:
-        bool: True if the node is an articulation point, else False.
+        bool: True if the node is an articulation point; False otherwise.
     """
     if node not in adj_list:
         logger.error(f"Node {node} not found in the adjacency list.")
@@ -294,10 +281,8 @@ def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
                 children += 1
                 tarjan_ap_util(w, v, disc, low, time, ap)
                 low[v] = min(low[v], low[w])
-
                 if parent is None and children > 1:
                     ap.add(v)
-
                 if parent is not None and low[w] >= disc[v]:
                     ap.add(v)
             elif w != parent:
@@ -321,13 +306,13 @@ def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
 
 def remove_articulation_area(adj_list: Dict[Any, List[Any]], node: Any) -> Dict[Any, List[Any]]:
     """
-    Removes an articulation point from the graph and reassigns it to maintain spatial connectivity.
-    If removal of the node disconnects the graph, the node is reassigned to the largest connected component.
-    If removal does not disconnect the graph, the node is reassigned to at least one of its original neighbors.
+    Removes an articulation point from the graph and reassigns it to maintain connectivity.
+    If removal disconnects the graph, the node is reassigned to the largest connected component;
+    otherwise, it is reassigned to one of its original neighbors.
 
     Parameters:
         adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
-        node (Any): The articulation point to remove and reassign.
+        node (Any): The articulation point to remove.
 
     Returns:
         Dict[Any, List[Any]]: The updated adjacency list after removal and reassignment.
@@ -336,43 +321,28 @@ def remove_articulation_area(adj_list: Dict[Any, List[Any]], node: Any) -> Dict[
         logger.error(f"Node {node} not found in the adjacency list.")
         raise KeyError(f"Node {node} not in adjacency list.")
 
-    # Create a copy of the adjacency list
     new_adj = {k: list(v) for k, v in adj_list.items()}
-
-    # Store original neighbors before removal
     original_neighbors = new_adj[node]
 
-    # Remove the node from all neighbors' lists
     for neighbor in original_neighbors:
         if node in new_adj[neighbor]:
             new_adj[neighbor].remove(node)
-
-    # Remove the node itself
     del new_adj[node]
 
-    # Check if the removal disconnected the graph
     components = find_connected_components(new_adj)
-
     if len(components) > 1:
-        # If disconnected, reassign the node to the largest component
         largest_component = max(components, key=len)
         new_adj[node] = []
-
         for neighbor in original_neighbors:
             if neighbor in largest_component:
                 new_adj[node].append(neighbor)
-                # Ensure bidirectional connectivity
+                # Ensure bidirectional connection
                 new_adj[neighbor].append(node)
-
         logger.warning(
             f"Articulation node {node} removed and reassigned to maintain connectivity.")
     else:
-        # If NOT disconnected, just reassign the node to at least one of its original neighbors
-        # Assign to the first original neighbor
         new_adj[node] = [original_neighbors[0]]
-        new_adj[original_neighbors[0]].append(
-            node)  # Ensure bidirectional connection
-
+        new_adj[original_neighbors[0]].append(node)
         logger.info(
             f"Node {node} was removed but reassigned to maintain connectivity.")
 
@@ -382,16 +352,20 @@ def remove_articulation_area(adj_list: Dict[Any, List[Any]], node: Any) -> Dict[
 def random_seed_selection(adj_list: Dict[Any, List[Any]], assigned_regions: Set[Any],
                           method: str = "gapless") -> Any:
     """
-    Implements gapless random seed selection as per PRRP methodology to ensure that new regions are
-    spatially contiguous.
+    Selects a seed node from the unassigned nodes using the "gapless" method.
+    A candidate seed is one that has at least one neighbor already assigned; if none exists,
+    a random unassigned node is returned.
 
     Parameters:
         adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
-        assigned_regions (Set[Any]): A set of nodes that have already been assigned to regions.
-        method (str, optional): The seed selection method. Default is "gapless".
+        assigned_regions (Set[Any]): Nodes already assigned to regions.
+        method (str, optional): Seed selection method (default "gapless").
 
     Returns:
         Any: The selected seed node.
+
+    Raises:
+        ValueError: If no unassigned nodes are available or the method is unknown.
     """
     unassigned = set(adj_list.keys()) - assigned_regions
     if not unassigned:
@@ -401,12 +375,10 @@ def random_seed_selection(adj_list: Dict[Any, List[Any]], assigned_regions: Set[
     if method == "gapless":
         candidate_seeds = {node for node in unassigned
                            if any(neighbor in assigned_regions for neighbor in adj_list[node])}
-
         if candidate_seeds:
             chosen = random.choice(list(candidate_seeds))
             logger.info(f"Selected gapless seed: {chosen}")
             return chosen
-
         chosen = random.choice(list(unassigned))
         logger.info(
             f"No gapless candidate found, selected random seed: {chosen}")
@@ -420,11 +392,20 @@ def load_graph_from_metis(file_path: str) -> Dict[int, List[int]]:
     """
     Reads a graph in METIS format and converts it into an adjacency list.
 
+    This function expects that the METIS file uses 1-based indexing.
+    The output will be a dictionary with keys 1..n and neighbor lists
+    that are also 1-indexed.
+
     Parameters:
         file_path (str): Path to the METIS format file.
 
     Returns:
-        Dict[int, List[int]]: The adjacency list representation of the graph.
+        Dict[int, List[int]]: The adjacency list representation of the graph,
+                              with 1-based node indices.
+
+    Raises:
+        ValueError: If the file is empty, the header is invalid, or the file is malformed.
+        Exception: For other I/O or parsing errors.
     """
     adj_list: Dict[int, List[int]] = {}
     try:
@@ -435,24 +416,68 @@ def load_graph_from_metis(file_path: str) -> Dict[int, List[int]]:
             logger.error("METIS file is empty.")
             raise ValueError("Empty METIS file.")
 
-        header = lines[0].strip().split()
-        if len(header) < 2:
-            logger.error("Invalid METIS header.")
-            raise ValueError("Invalid METIS header format.")
-        num_nodes = int(header[0])
+        # Remove blank lines and comment lines (starting with '%')
+        content_lines = [
+            line.strip() for line in lines if line.strip() and not line.strip().startswith('%')
+        ]
+        if not content_lines:
+            logger.error(
+                "METIS file is empty or contains only comments/whitespace.")
+            raise ValueError("Empty METIS file.")
 
-        for i, line in enumerate(lines[1:], start=1):
-            if line.strip():
-                neighbors = [int(x) for x in line.strip().split()]
-            else:
-                neighbors = []
-            adj_list[i] = neighbors
+        header_tokens = content_lines[0].split()
+        if len(header_tokens) < 2:
+            logger.error(
+                "Invalid METIS header: requires at least two tokens (num_nodes and num_edges).")
+            raise ValueError("Invalid METIS header: not enough tokens.")
+        num_nodes = int(header_tokens[0])
+        header_edge_count = int(header_tokens[1])
 
-        for i in range(1, num_nodes + 1):
-            if i not in adj_list:
-                adj_list[i] = []
+        # Ensure there are enough lines for all nodes.
+        if len(content_lines) - 1 < num_nodes:
+            logger.error("Insufficient vertex lines in METIS file.")
+            raise ValueError("Insufficient vertex lines in METIS file.")
 
-        logger.info(f"Loaded graph from {file_path} successfully.")
+        # Process each node (using 1-based indexing)
+        for i in range(num_nodes):
+            # Node id will be i+1.
+            line = content_lines[i + 1]
+            tokens = line.split()
+            neighbors = []
+            for token in tokens:
+                try:
+                    neighbor = int(token)  # DO NOT subtract 1.
+                except Exception as e:
+                    logger.error(
+                        f"Vertex {i+1}: Invalid neighbor token '{token}'.")
+                    raise ValueError(
+                        f"Invalid neighbor token in vertex {i+1}.") from e
+                # Avoid self-loops (if neighbor equals the current node id)
+                if neighbor != i + 1:
+                    neighbors.append(neighbor)
+            # Validate that neighbor indices are in the range 1..num_nodes.
+            for neighbor in neighbors:
+                if neighbor < 1 or neighbor > num_nodes:
+                    logger.error(
+                        f"Vertex {i+1}: Neighbor index {neighbor} out of range (1 to {num_nodes}).")
+                    raise ValueError(
+                        f"Neighbor index out of range in vertex {i+1}.")
+            adj_list[i + 1] = neighbors
+
+        total_neighbor_entries = sum(len(nlist) for nlist in adj_list.values())
+        # The header may list the number of edges (which might be half the sum if undirected)
+        if total_neighbor_entries == header_edge_count:
+            final_num_edges = header_edge_count
+        elif total_neighbor_entries == 2 * header_edge_count:
+            final_num_edges = header_edge_count
+        else:
+            final_num_edges = total_neighbor_entries // 2
+            logger.warning(
+                f"Computed total neighbor entries ({total_neighbor_entries}) do not match header edge count ({header_edge_count}). Using computed edge count: {final_num_edges}."
+            )
+
+        logger.info(
+            f"Loaded METIS graph from '{file_path}': {num_nodes} nodes, {final_num_edges} edges.")
         return adj_list
 
     except Exception as e:
@@ -479,7 +504,6 @@ def save_graph_to_metis(file_path: str, adj_list: Dict[int, List[int]]) -> None:
             for i in range(1, num_nodes + 1):
                 neighbors = adj_list.get(i, [])
                 f.write(" ".join(map(str, neighbors)) + "\n")
-
         logger.info(
             f"Graph saved to {file_path} in METIS format successfully.")
     except Exception as e:
@@ -490,40 +514,37 @@ def save_graph_to_metis(file_path: str, adj_list: Dict[int, List[int]]) -> None:
 
 def find_boundary_areas(region: Set[Any], adj_list: Dict[Any, List[Any]]) -> Set[Any]:
     """
-    Identifies boundary areas of a given region. A boundary area is defined as a node that has at least
-    one neighbor outside the region.
+    Identifies boundary areas of a region. A boundary area is a node with at least one neighbor outside the region.
 
     Parameters:
-        region (Set[Any]): A set of nodes representing the region.
+        region (Set[Any]): The set of nodes in the region.
         adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
 
     Returns:
-        Set[Any]: A set of nodes that are boundary areas of the region.
+        Set[Any]: The set of boundary nodes.
     """
     boundary: Set[Any] = set()
-
     for node in region:
         for neighbor in adj_list.get(node, []):
             if neighbor not in region:
                 boundary.add(node)
                 break
-
     logger.info(f"Identified {len(boundary)} boundary area(s) in the region.")
     return boundary
 
 
 def calculate_low_link_values(adj_list: Dict[Any, List[Any]]) -> Tuple[Dict[Any, int], Dict[Any, int]]:
     """
-    Computes discovery and low-link values for all nodes in the graph using a DFS-based approach,
-    which are essential for detecting articulation points via Tarjan's algorithm.
+    Computes discovery and low-link values for all nodes in the graph using DFS.
+    These values are used for detecting articulation points via Tarjan's algorithm.
 
     Parameters:
         adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
 
     Returns:
         Tuple[Dict[Any, int], Dict[Any, int]]:
-            - disc: A dictionary mapping each node to its discovery time.
-            - low: A dictionary mapping each node to its low-link value.
+            - disc: Mapping of node to discovery time.
+            - low: Mapping of node to its low-link value.
     """
     disc: Dict[Any, int] = {}
     low: Dict[Any, int] = {}
@@ -552,20 +573,17 @@ def parallel_execute(function: Callable[[Any], Any],
                      num_threads: int = 1,
                      use_multiprocessing: bool = False) -> List[Any]:
     """
-    Executes a function in parallel over the provided data if parallel processing is enabled and
-    the number of threads is greater than 1. Depending on the flag 'use_multiprocessing', either
-    threading or multiprocessing is used.
+    Executes a function in parallel over the provided data if parallel processing is enabled
+    and num_threads > 1. Uses multiprocessing if specified; otherwise, uses threading.
 
     Parameters:
-        function (Callable[[Any], Any]): The function to execute.
-        data (Iterable[Any]): An iterable of data items to process.
-        num_threads (int, optional): The number of threads/processes to use for parallel processing.
-                                     Defaults to 1.
-        use_multiprocessing (bool, optional): If True, use multiprocessing; otherwise, use threading.
-                                              Defaults to False.
+        function (Callable[[Any], Any]): The function to apply.
+        data (Iterable[Any]): The data items to process.
+        num_threads (int, optional): Number of threads/processes to use (default 1).
+        use_multiprocessing (bool, optional): Whether to use multiprocessing (default False).
 
     Returns:
-        List[Any]: A list of results after applying the function to each data item.
+        List[Any]: List of results.
     """
     if num_threads > 1 and PARALLEL_PROCESSING_ENABLED:
         if use_multiprocessing:
