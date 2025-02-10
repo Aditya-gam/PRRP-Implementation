@@ -84,15 +84,25 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
     to allow the algorithm to run without errors.
 
     Parameters:
-        areas (GeoDataFrame or list): Spatial areas with geometry information.
+        data (Any): Input data, which can be:
+                    - GeoDataFrame (spatial PRRP) 
+                    - Graph adjacency list (graph PRRP)
+        is_graph (bool): Whether the input is a graph (True) or spatial data (False).
 
     Returns:
-        Dict[Any, Set[Any]]: A dictionary mapping each area identifier to a set of
-                              spatially contiguous (adjacent) area identifiers.
+        Dict[Any, Set[Any]]: Adjacency list representation.
     """
     adj_list: Dict[Any, Set[Any]] = {}
 
-    if isinstance(areas, gpd.GeoDataFrame):
+    # Case 1: Graph-Based PRRP (Standard Adjacency List)
+    if isinstance(areas, dict):
+        for node, neighbors in areas.items():
+            # Convert lists to sets for efficiency
+            adj_list[node] = set(neighbors)
+        return adj_list
+
+    # Case 2: Spatial PRRP (GeoDataFrame Handling)
+    elif isinstance(areas, gpd.GeoDataFrame):
         try:
             sindex = areas.sindex
         except Exception as e:
@@ -110,6 +120,8 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
                 other_geom = areas.loc[other_idx].geometry
                 if _has_rook_adjacency(geom, other_geom):
                     adj_list[idx].add(other_idx)
+
+    # Case 3: List of Dictionaries (Custom Geometry Handling)
     elif isinstance(areas, list):
         # Check if all areas have 'geometry' set to None (dummy data)
         if all(area.get('geometry') is None for area in areas):
@@ -154,6 +166,70 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
             "Unsupported type for areas. Expected GeoDataFrame or list.")
 
     return adj_list
+
+
+def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
+    """
+    Computes articulation points in a graph using Tarjan’s Algorithm.
+
+    Parameters:
+        G (Dict[int, List[int]]): Graph adjacency list representation.
+
+    Returns:
+        Set[int]: Set of articulation points.
+
+    Explanation:
+    - Uses DFS to explore the graph while maintaining:
+        - `disc`: Discovery time of each node.
+        - `low`: Lowest discovery time reachable from a node.
+        - `parent`: Parent tracking for DFS traversal.
+    - A node is an articulation point if:
+        1. It is the root with two or more independent DFS subtrees.
+        2. It has a child where `low[child] ≥ disc[node]` (meaning no back-edge reconnecting to an ancestor).
+    - Runs in **O(V + E) time complexity**, making it efficient for large graphs.
+    """
+
+    # Initialize structures
+    disc = {}  # Discovery time
+    low = {}   # Lowest reachable discovery time
+    parent = {}  # Parent tracker for DFS tree
+    ap = set()  # Store articulation points
+    time = [0]  # Mutable counter to track discovery order
+
+    def dfs(u):
+        """
+        DFS traversal to find articulation points.
+        """
+        children = 0
+        disc[u] = low[u] = time[0]
+        time[0] += 1
+
+        for v in G[u]:
+            if v not in disc:  # If v is not visited
+                parent[v] = u
+                children += 1
+                dfs(v)
+
+                # Update low-link value
+                low[u] = min(low[u], low[v])
+
+                # Case 1: Root node with multiple independent DFS subtrees
+                if u not in parent and children > 1:
+                    ap.add(u)
+
+                # Case 2: Non-root node where a child's subtree cannot reach an ancestor of u
+                if u in parent and low[v] >= disc[u]:
+                    ap.add(u)
+
+            elif v != parent.get(u, None):  # Back-edge case (ignore edge to parent)
+                low[u] = min(low[u], disc[v])
+
+    # Run DFS for all components
+    for node in G:
+        if node not in disc:
+            dfs(node)
+
+    return ap  # Return set of articulation points
 
 
 def find_connected_components(adj_list: Dict[Any, List[Any]]) -> List[Set[Any]]:
