@@ -248,6 +248,35 @@ def test_large_graph_performance(tmp_path):
     assert num_nodes > 1000
 
 
+def test_load_pgpgiantcompo_graph():
+    """
+    Test loading the large METIS graph file 'PGPgiantcompo.graph' from the data directory.
+    This ensures that the graph is correctly parsed and structured for use in Graph PRRP.
+    If the file is missing, the test is skipped.
+    """
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    graph_path = os.path.join(base_dir, "data", "PGPgiantcompo.graph")
+
+    if not os.path.exists(graph_path):
+        pytest.skip("PGPgiantcompo.graph not found, skipping test.")
+
+    adj_list, num_nodes, num_edges = load_graph_from_metis(graph_path)
+
+    # Validate the parsed data structure
+    assert isinstance(adj_list, dict), "Adjacency list should be a dictionary."
+    assert isinstance(
+        num_nodes, int) and num_nodes > 0, "Number of nodes should be positive."
+    assert isinstance(
+        num_edges, int) and num_edges > 0, "Number of edges should be positive."
+
+    # Ensure at least some nodes have neighbors (real-world connectivity)
+    non_empty_nodes = sum(1 for neighbors in adj_list.values() if neighbors)
+    assert non_empty_nodes > 0, "At least some nodes should have neighbors."
+
+    print(
+        f"Successfully loaded PGPgiantcompo.graph with {num_nodes} nodes and {num_edges} edges.")
+
+
 # ---------- Optional: Allow Running Tests Directly ----------
 if __name__ == "__main__":
     pytest.main()
