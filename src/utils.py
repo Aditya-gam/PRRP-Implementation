@@ -181,16 +181,6 @@ def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
         Set[int]: Set of nodes that are articulation points. If the graph is already disconnected,
                   or if there are no articulation points (e.g., single-node or fully connected graphs),
                   returns an empty set.
-
-    Explanation:
-      - The function first converts the input to a dictionary of sets for efficient lookups.
-      - It then checks for connectivity; if the graph is disconnected, it returns an empty set.
-      - The iterative DFS uses an explicit stack where each frame is a tuple:
-            (current_node, iterator_over_neighbors)
-      - Discovery times (disc) and low-link values (low) are computed.
-      - A non-root node is marked as an articulation point if for any child v,
-            low[v] >= disc[u].
-      - A root node is an articulation point if it has more than one child.
     """
     # Convert neighbor lists to sets (if they aren’t already) for O(1) lookups.
     adj = {u: set(neighbors) for u, neighbors in G.items()}
@@ -251,8 +241,8 @@ def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
                 if stack_frame:
                     par, _ = stack_frame[-1]
                     low[par] = min(low[par], low[current])
-                    # For non-root nodes, check if the current subtree cannot reach an ancestor of its parent.
-                    if parent[current] == par and low[current] >= disc[par]:
+                    # Only mark par as an articulation point if par is not the root.
+                    if parent[current] == par and parent[par] is not None and low[current] >= disc[par]:
                         ap.add(par)
                 else:
                     # 'current' is the root node.
