@@ -74,13 +74,14 @@ def _has_rook_adjacency(geom1: BaseGeometry, geom2: BaseGeometry) -> bool:
 
 def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
     """
-    Creates a graph adjacency list using rook adjacency (i.e., regions that share a boundary).
+    Creates a graph adjacency list using rook adjacency (for spatial data) or by directly
+    converting a pre-constructed graph-based input.
 
-    This function supports input in three forms:
-      1. A pre-constructed adjacency list (dictionary) – in which case it converts each neighbor list to a set.
-      2. A GeoDataFrame (spatial PRRP) – uses the spatial index and geometry intersections to determine adjacency.
-      3. A list of dictionaries (custom spatial data) – if all areas have 'geometry' set to None, it creates a complete graph;
-         otherwise, it computes adjacency based on the provided geometries.
+    This function supports three forms of input:
+      1. A pre-constructed adjacency list (dictionary): Converts each neighbor list to a set.
+      2. A GeoDataFrame (spatial PRRP): Uses spatial indexing and geometry intersections.
+      3. A list of dictionaries (custom spatial data): Constructs either a complete graph
+         (if all geometries are None) or computes adjacency based on geometries.
 
     Parameters:
         areas (GeoDataFrame, list, or dict): Spatial areas with geometry information or a pre-built adjacency list.
@@ -96,7 +97,7 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
     if isinstance(areas, dict):
         new_adj_list = {}
         for key, value in areas.items():
-            # Ensure that each neighbor list is a set
+            # Convert neighbor lists to sets for efficient lookups.
             new_adj_list[key] = value if isinstance(value, set) else set(value)
         logger.info(
             "Input is a dictionary; returning pre-constructed adjacency list.")
@@ -169,70 +170,94 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
 
 def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
     """
-    Computes articulation points in a graph using Tarjan’s Algorithm.
+    Computes articulation points in a graph using Tarjan’s Algorithm implemented via an
+    iterative DFS approach. This avoids Python’s recursion depth issues when handling large graphs.
 
     Parameters:
-        G (Dict[int, List[int]]): Graph adjacency list representation.
+        G (Dict[int, List[int]]): Graph represented as an adjacency list where keys are node IDs
+                                  and values are lists of adjacent node IDs.
 
     Returns:
-        Set[int]: Set of articulation points.
+        Set[int]: Set of nodes that are articulation points. If the graph is already disconnected,
+                  or if there are no articulation points (e.g., single-node or fully connected graphs),
+                  returns an empty set.
 
     Explanation:
-      - The function uses DFS to explore the graph while maintaining:
-          - `disc`: Discovery time for each node.
-          - `low`: The lowest discovery time reachable from that node.
-          - `parent`: The parent of each node in the DFS tree.
-      - A node is considered an articulation point if:
-          1. It is the root of the DFS tree and has more than one child.
-          2. It is not the root and for some child v, low[v] >= disc[node].
-      - Runs in O(V + E) time.
-
-    Note:
-      - For large graphs, the recursion depth may exceed Python's default limit.
-      - This implementation temporarily increases the recursion limit to handle deep DFS trees.
+      - The function first converts the input to a dictionary of sets for efficient lookups.
+      - It then checks for connectivity; if the graph is disconnected, it returns an empty set.
+      - The iterative DFS uses an explicit stack where each frame is a tuple:
+            (current_node, iterator_over_neighbors)
+      - Discovery times (disc) and low-link values (low) are computed.
+      - A non-root node is marked as an articulation point if for any child v,
+            low[v] >= disc[u].
+      - A root node is an articulation point if it has more than one child.
     """
-    import sys
-    old_limit = sys.getrecursionlimit()
-    # Increase recursion limit (adjust the value if needed)
-    new_limit = max(old_limit, 15000)
-    sys.setrecursionlimit(new_limit)
+    # Convert neighbor lists to sets (if they aren’t already) for O(1) lookups.
+    adj = {u: set(neighbors) for u, neighbors in G.items()}
 
-    disc: Dict[Any, int] = {}
-    low: Dict[Any, int] = {}
-    parent: Dict[Any, Any] = {}
-    ap: Set[Any] = set()
-    time = [0]  # Using a list so that the integer is mutable
+    # Check connectivity: if the graph is disconnected, return an empty set.
+    if not adj:
+        return set()
+    start_node = next(iter(adj))
+    visited = set()
+    stack = [start_node]
+    while stack:
+        node = stack.pop()
+        if node not in visited:
+            visited.add(node)
+            stack.extend(adj[node] - visited)
+    if len(visited) != len(adj):
+        # Graph is disconnected.
+        return set()
 
-    def dfs(u: Any) -> None:
-        nonlocal time
-        children = 0
-        disc[u] = low[u] = time[0]
-        time[0] += 1
+    disc: Dict[int, int] = {}
+    low: Dict[int, int] = {}
+    parent: Dict[int, int] = {}
+    ap: Set[int] = set()
+    time_counter = 0
+    child_count: Dict[int, int] = {}
 
-        for v in G[u]:
-            if v not in disc:
-                parent[v] = u
-                children += 1
-                dfs(v)
-                low[u] = min(low[u], low[v])
+    # Stack for iterative DFS: each element is a tuple (node, neighbor_iterator)
+    stack_frame = []
 
-                # Case 1: Root with multiple children
-                if parent.get(u) is None and children > 1:
-                    ap.add(u)
-                # Case 2: Non-root where no back-edge exists from v's subtree to an ancestor of u
-                if parent.get(u) is not None and low[v] >= disc[u]:
-                    ap.add(u)
-            elif v != parent.get(u, None):
-                low[u] = min(low[u], disc[v])
+    # Process every node (though graph is connected, this covers any isolated subgraphs)
+    for u in adj:
+        if u in disc:
+            continue  # Already visited in DFS.
+        parent[u] = None
+        disc[u] = time_counter
+        low[u] = time_counter
+        time_counter += 1
+        child_count[u] = 0
+        stack_frame.append((u, iter(adj[u])))
 
-    for u in G:
-        if u not in disc:
-            parent[u] = None
-            dfs(u)
-
-    # Restore the original recursion limit
-    sys.setrecursionlimit(old_limit)
-    logger.info(f"Found articulation points: {ap}")
+        while stack_frame:
+            current, neighbors_iter = stack_frame[-1]
+            try:
+                v = next(neighbors_iter)
+                if v not in disc:
+                    parent[v] = current
+                    child_count[current] = child_count.get(current, 0) + 1
+                    disc[v] = time_counter
+                    low[v] = time_counter
+                    time_counter += 1
+                    child_count[v] = 0
+                    stack_frame.append((v, iter(adj[v])))
+                elif v != parent[current]:
+                    low[current] = min(low[current], disc[v])
+            except StopIteration:
+                # Finished processing all neighbors for 'current'
+                stack_frame.pop()
+                if stack_frame:
+                    par, _ = stack_frame[-1]
+                    low[par] = min(low[par], low[current])
+                    # For non-root nodes, check if the current subtree cannot reach an ancestor of its parent.
+                    if parent[current] == par and low[current] >= disc[par]:
+                        ap.add(par)
+                else:
+                    # 'current' is the root node.
+                    if child_count[current] > 1:
+                        ap.add(current)
     return ap
 
 
