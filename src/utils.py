@@ -171,33 +171,18 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
 def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
     """
     Computes articulation points in a graph using Tarjan’s Algorithm implemented via an
-    iterative DFS approach. This avoids Python’s recursion depth issues when handling large graphs.
+    iterative DFS approach. This version processes every connected component separately.
 
     Parameters:
         G (Dict[int, List[int]]): Graph represented as an adjacency list where keys are node IDs
                                   and values are lists of adjacent node IDs.
 
     Returns:
-        Set[int]: Set of nodes that are articulation points. If the graph is already disconnected,
-                  or if there are no articulation points (e.g., single-node or fully connected graphs),
-                  returns an empty set.
+        Set[int]: Set of nodes that are articulation points.
     """
     # Convert neighbor lists to sets (if they aren’t already) for O(1) lookups.
     adj = {u: set(neighbors) for u, neighbors in G.items()}
-
-    # Check connectivity: if the graph is disconnected, return an empty set.
     if not adj:
-        return set()
-    start_node = next(iter(adj))
-    visited = set()
-    stack = [start_node]
-    while stack:
-        node = stack.pop()
-        if node not in visited:
-            visited.add(node)
-            stack.extend(adj[node] - visited)
-    if len(visited) != len(adj):
-        # Graph is disconnected.
         return set()
 
     disc: Dict[int, int] = {}
@@ -210,10 +195,10 @@ def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
     # Stack for iterative DFS: each element is a tuple (node, neighbor_iterator)
     stack_frame = []
 
-    # Process every node (though graph is connected, this covers any isolated subgraphs)
+    # Process every node to cover each connected component.
     for u in adj:
         if u in disc:
-            continue  # Already visited in DFS.
+            continue  # Already visited in a previous DFS.
         parent[u] = None
         disc[u] = time_counter
         low[u] = time_counter
@@ -236,7 +221,6 @@ def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
                 elif v != parent[current]:
                     low[current] = min(low[current], disc[v])
             except StopIteration:
-                # Finished processing all neighbors for 'current'
                 stack_frame.pop()
                 if stack_frame:
                     par, _ = stack_frame[-1]
@@ -245,7 +229,7 @@ def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
                     if parent[current] == par and parent[par] is not None and low[current] >= disc[par]:
                         ap.add(par)
                 else:
-                    # 'current' is the root node.
+                    # 'current' is the root of the connected component.
                     if child_count[current] > 1:
                         ap.add(current)
     return ap
