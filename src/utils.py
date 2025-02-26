@@ -593,6 +593,7 @@ def compute_degree_list(G: Dict[int, List[int]]) -> Dict[int, List[int]]:
     - Computes the degree (number of neighbors) for each node.
     - Identifies parent nodes as nodes with a degree higher than the median degree of their neighbors.
     - A node is assigned as a child if it is adjacent to a parent and has a lower degree.
+    - Only symmetric edges (i.e., edges where u is in G[v] and v is in G[u]) are processed.
     - Isolated nodes (degree = 0) or nodes without a clear degree difference remain unassigned.
     - Optimized for large-scale graphs using O(V + E) dictionary lookups.
     """
@@ -623,16 +624,18 @@ def compute_degree_list(G: Dict[int, List[int]]) -> Dict[int, List[int]]:
     # Step 3: Initialize the degree list dictionary with an empty list for each node.
     degree_list = {node: [] for node in G}
 
-    # Step 4: Iterate over each edge (processed only once for undirected graphs)
-    # and assign child nodes to a parent when the parent's degree is higher.
-    processed_edges = set()  # To avoid processing the same edge twice
+    # Step 4: Process each undirected (symmetric) edge only once.
+    processed_edges = set()
     for u in G:
         for v in G[u]:
-            # Ensure both endpoints are valid nodes in the graph
+            # Ensure both endpoints are valid nodes in the graph.
             if v not in G:
                 continue
+            # Enforce symmetry: process the edge only if u is in G[v]
+            if u not in G[v]:
+                continue
 
-            # Create a unique representation for the undirected edge
+            # Create a unique representation for the undirected edge.
             edge = tuple(sorted((u, v)))
             if edge in processed_edges:
                 continue
@@ -644,7 +647,6 @@ def compute_degree_list(G: Dict[int, List[int]]) -> Dict[int, List[int]]:
                 degree_list[u].append(v)
             elif is_parent.get(v, False) and (not is_parent.get(u, False)) and (degrees[v] > degrees[u]):
                 degree_list[v].append(u)
-            # If both nodes are either parents or non-parents, no clear nesting is defined; no assignment is made.
 
     return degree_list
 
