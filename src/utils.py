@@ -579,6 +579,76 @@ def calculate_low_link_values(adj_list: Dict[Any, List[Any]]) -> Tuple[Dict[Any,
     return disc, low
 
 
+def compute_degree_list(G: Dict[int, List[int]]) -> Dict[int, List[int]]:
+    """
+    Computes the degree list for each node and identifies parent-child relationships.
+
+    Parameters:
+        G (Dict[int, List[int]]): Graph adjacency list representation.
+
+    Returns:
+        Dict[int, List[int]]: Dictionary mapping each node to its list of nested (child) nodes.
+
+    Explanation:
+    - Computes the degree (number of neighbors) for each node.
+    - Identifies parent nodes as nodes with a degree higher than the median degree of their neighbors.
+    - A node is assigned as a child if it is adjacent to a parent and has a lower degree.
+    - Isolated nodes (degree = 0) or nodes without a clear degree difference remain unassigned.
+    - Optimized for large-scale graphs using O(V + E) dictionary lookups.
+    """
+    # Step 1: Compute the degree of each node
+    degrees = {node: len(neighbors) for node, neighbors in G.items()}
+
+    # Step 2: Identify potential parent nodes.
+    # A node is considered a parent if its degree is greater than the median degree of its neighbors.
+    is_parent = {}
+    for node, neighbors in G.items():
+        if not neighbors:  # Isolated node: cannot be a parent
+            is_parent[node] = False
+            continue
+
+        # Gather the degrees of all neighboring nodes
+        neighbor_degrees = [degrees[nb] for nb in neighbors if nb in degrees]
+        sorted_degs = sorted(neighbor_degrees)
+        n = len(sorted_degs)
+        # Compute the median of neighbor degrees
+        if n % 2 == 1:
+            median = sorted_degs[n // 2]
+        else:
+            median = (sorted_degs[n // 2 - 1] + sorted_degs[n // 2]) / 2
+
+        # Mark as parent if the node's degree is strictly greater than the median
+        is_parent[node] = degrees[node] > median
+
+    # Step 3: Initialize the degree list dictionary with an empty list for each node.
+    degree_list = {node: [] for node in G}
+
+    # Step 4: Iterate over each edge (processed only once for undirected graphs)
+    # and assign child nodes to a parent when the parent's degree is higher.
+    processed_edges = set()  # To avoid processing the same edge twice
+    for u in G:
+        for v in G[u]:
+            # Ensure both endpoints are valid nodes in the graph
+            if v not in G:
+                continue
+
+            # Create a unique representation for the undirected edge
+            edge = tuple(sorted((u, v)))
+            if edge in processed_edges:
+                continue
+            processed_edges.add(edge)
+
+            # Establish parent-child relationship:
+            # If one node is a parent and the other is not—and the parent's degree is higher—assign the non-parent as a child.
+            if is_parent.get(u, False) and (not is_parent.get(v, False)) and (degrees[u] > degrees[v]):
+                degree_list[u].append(v)
+            elif is_parent.get(v, False) and (not is_parent.get(u, False)) and (degrees[v] > degrees[u]):
+                degree_list[v].append(u)
+            # If both nodes are either parents or non-parents, no clear nesting is defined; no assignment is made.
+
+    return degree_list
+
+
 def parallel_execute(function: Callable[[Any], Any],
                      data: Iterable[Any],
                      num_threads: int = 1,
