@@ -71,10 +71,8 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
     unassigned = set(all_nodes)
 
     while unassigned and partition_id <= p:
-        # Select seed node using the gapless method.
-        assigned_nodes = set()
-        for part in partitions.values():
-            assigned_nodes |= part
+        # Remove already assigned nodes from consideration.
+        assigned_nodes = set().union(*partitions.values())
         try:
             seed = random_seed_selection(
                 G_adj, assigned_nodes, method="gapless")
@@ -84,40 +82,56 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
             seed = random.choice(list(unassigned))
 
         # Grow the partition from the selected seed.
-        partition = grow_partition(G_adj, unassigned, partition_id, C, MR)
+        grown_partition = grow_partition(
+            G_adj, unassigned, partition_id, C, MR)
         logger.info(
-            f"Grew partition {partition_id} with {len(partition)} nodes.")
+            f"Grew partition {partition_id} with {len(grown_partition)} nodes.")
 
-        # Ensure the partition is connected by merging any disconnected areas.
-        partition = merge_disconnected_areas(G_adj, unassigned, partition)
+        # Merge disconnected components and capture any dropped nodes.
+        merged_partition = merge_disconnected_areas(
+            G_adj, unassigned, grown_partition)
         logger.info(
-            f"After merging, partition {partition_id} has {len(partition)} nodes.")
+            f"After merging, partition {partition_id} has {len(merged_partition)} nodes.")
 
-        # If the partition is too large, split it into smaller connected regions.
-        if len(partition) > MS:
+        # Compute dropped nodes (nodes that were in the grown partition but not in the merged one).
+        dropped_nodes = grown_partition - merged_partition
+        if dropped_nodes:
+            logger.info(
+                f"Returning {len(dropped_nodes)} dropped nodes to unassigned.")
+            unassigned |= dropped_nodes
+
+        # If the partition is too large, split it.
+        if len(merged_partition) > MS:
             logger.info(
                 f"Partition {partition_id} exceeds maximum size {MS}. Splitting...")
-            new_parts = split_partition(G_adj, partition, C)
+            new_parts = split_partition(G_adj, merged_partition, C)
             for np in new_parts:
                 partitions[partition_id] = np
                 logger.info(
                     f"Created partition {partition_id} with {len(np)} nodes after splitting.")
                 partition_id += 1
         else:
-            partitions[partition_id] = partition
+            partitions[partition_id] = merged_partition
             partition_id += 1
 
-        # Remove assigned nodes from unassigned.
-        unassigned -= partition
+        # Remove the nodes in the merged partition from unassigned.
+        unassigned -= merged_partition
 
-    # Assign any remaining unassigned nodes to the smallest partition.
-    if unassigned:
-        logger.info(
-            "Assigning remaining unassigned nodes to the smallest partition.")
-        smallest_part = min(partitions.items(),
-                            key=lambda item: len(item[1]))[0]
-        partitions[smallest_part].update(unassigned)
-        unassigned.clear()
+    # Final assignment: assign any remaining unassigned nodes in a connectivity-preserving way.
+    while unassigned:
+        node = unassigned.pop()
+        candidate_partitions = []
+        for pid, part in partitions.items():
+            if any(neighbor in part for neighbor in G_adj[node]):
+                candidate_partitions.append((pid, part))
+        if candidate_partitions:
+            best_pid, best_part = max(candidate_partitions, key=lambda item: sum(
+                1 for neighbor in G_adj[node] if neighbor in item[1]))
+            best_part.add(node)
+        else:
+            smallest_pid = min(partitions.items(),
+                               key=lambda item: len(item[1]))[0]
+            partitions[smallest_pid].add(node)
 
     return partitions
 
@@ -137,12 +151,18 @@ def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int) -> Set:
         Set: Set of nodes forming the grown partition.
 
     Process:
-        - Select a seed node (using gapless seed selection).
-        - Use an iterative BFS (queue-based) to add adjacent nodes.
+        - If the number of unassigned nodes is less than the target, return all remaining nodes.
+        - Otherwise, select a seed and use an iterative BFS to add adjacent nodes.
         - Prefer adding neighbors that are not articulation points.
         - If no non-articulation candidate exists, add an articulation point.
         - If the queue empties before reaching the target size, try adding a new seed (up to MR retries).
     """
+    # If the remaining unassigned nodes are fewer than the target, return them directly.
+    if len(U) < c:
+        partition = set(U)
+        U.clear()
+        return partition
+
     partition = set()
     attempts = 0
 
@@ -163,7 +183,8 @@ def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int) -> Set:
         added_any = False
         # First, gather candidates that are NOT articulation points.
         non_articulation_candidates = [
-            nbr for nbr in G[current] if nbr in U and not is_articulation_point(G, nbr)]
+            nbr for nbr in G[current] if nbr in U and not is_articulation_point(G, nbr)
+        ]
         if non_articulation_candidates:
             for neighbor in non_articulation_candidates:
                 if neighbor in U:
