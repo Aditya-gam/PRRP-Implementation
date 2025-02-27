@@ -139,8 +139,9 @@ def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int) -> Set:
     Process:
         - Select a seed node (using gapless seed selection).
         - Use an iterative BFS (queue-based) to add adjacent nodes.
-        - Skip nodes that are articulation points to maintain connectivity.
-        - If the queue empties before reaching target size, try adding a new seed (up to MR retries).
+        - Prefer adding neighbors that are not articulation points.
+        - If no non-articulation candidate exists, add an articulation point.
+        - If the queue empties before reaching the target size, try adding a new seed (up to MR retries).
     """
     partition = set()
     attempts = 0
@@ -155,35 +156,48 @@ def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int) -> Set:
 
     partition.add(seed)
     U.discard(seed)
-
     queue = deque([seed])
 
     while queue and len(partition) < c:
         current = queue.popleft()
-        for neighbor in G[current]:
-            if neighbor in U:
-                if is_articulation_point(G, neighbor):
-                    continue
-                partition.add(neighbor)
-                U.discard(neighbor)
-                queue.append(neighbor)
-                if len(partition) >= c:
-                    break
-        if not queue and len(partition) < c and U:
-            if attempts < MR:
-                # Attempt to add a new seed adjacent to the current partition.
-                adjacent_candidates = set()
-                for node in partition:
-                    adjacent_candidates |= (G[node] & U)
-                if adjacent_candidates:
-                    new_seed = random.choice(list(adjacent_candidates))
-                else:
-                    new_seed = random.choice(list(U))
-                partition.add(new_seed)
-                U.discard(new_seed)
-                queue.append(new_seed)
-                attempts += 1
+        added_any = False
+        # First, gather candidates that are NOT articulation points.
+        non_articulation_candidates = [
+            nbr for nbr in G[current] if nbr in U and not is_articulation_point(G, nbr)]
+        if non_articulation_candidates:
+            for neighbor in non_articulation_candidates:
+                if neighbor in U:
+                    partition.add(neighbor)
+                    U.discard(neighbor)
+                    queue.append(neighbor)
+                    added_any = True
+                    if len(partition) >= c:
+                        break
+        else:
+            # If no safe candidate exists, fall back to adding any unassigned neighbor.
+            for neighbor in G[current]:
+                if neighbor in U:
+                    partition.add(neighbor)
+                    U.discard(neighbor)
+                    queue.append(neighbor)
+                    added_any = True
+                    if len(partition) >= c:
+                        break
+
+        # If nothing was added from the current node and the queue is empty, try to add a candidate from adjacent nodes.
+        if not added_any and not queue and len(partition) < c and U:
+            adjacent_candidates = set()
+            for node in partition:
+                adjacent_candidates |= (G[node] & U)
+            if adjacent_candidates:
+                new_seed = random.choice(list(adjacent_candidates))
             else:
+                new_seed = random.choice(list(U))
+            partition.add(new_seed)
+            U.discard(new_seed)
+            queue.append(new_seed)
+            attempts += 1
+            if attempts >= MR:
                 logger.warning(
                     f"Partition {p} growth stalled after {MR} retries.")
                 break
@@ -208,9 +222,35 @@ def merge_disconnected_areas(G: Dict, U: Set, Pi: Set) -> Set:
         - Compute its connected components (using DFS-based connected component analysis).
         - If multiple components exist, merge them by (at minimum) adopting the largest component.
     """
-    # Build the induced subgraph.
+    # # Build the induced subgraph.
+    # induced_adj = {node: {nbr for nbr in G[node] if nbr in Pi} for node in Pi}
+    # # Convert to the format expected by find_connected_components (list-based neighbors).
+    # comp_input = {node: list(neighbors)
+    #               for node, neighbors in induced_adj.items()}
+    # components = find_connected_components(comp_input)
+
+    # if len(components) <= 1:
+    #     return Pi
+
+    # largest_component = max(components, key=len)
+    # merged = set(largest_component)
+
+    # # Merge other components if any node within them connects to the largest component.
+    # for comp in components:
+    #     if comp == largest_component:
+    #         continue
+    #     for node in comp:
+    #         if any(neighbor in largest_component for neighbor in G[node]):
+    #             merged.add(node)
+    #     merged |= comp
+
+    # logger.info(
+    #     f"Merged {len(components)} components into one connected partition with {len(merged)} nodes.")
+    # return merged
+
+    # Build the induced subgraph for nodes in Pi.
     induced_adj = {node: {nbr for nbr in G[node] if nbr in Pi} for node in Pi}
-    # Convert to the format expected by find_connected_components (list-based neighbors).
+    # Prepare input for connected component analysis.
     comp_input = {node: list(neighbors)
                   for node, neighbors in induced_adj.items()}
     components = find_connected_components(comp_input)
@@ -218,21 +258,12 @@ def merge_disconnected_areas(G: Dict, U: Set, Pi: Set) -> Set:
     if len(components) <= 1:
         return Pi
 
+    # Return only the largest connected component.
     largest_component = max(components, key=len)
-    merged = set(largest_component)
-
-    # Merge other components if any node within them connects to the largest component.
-    for comp in components:
-        if comp == largest_component:
-            continue
-        for node in comp:
-            if any(neighbor in largest_component for neighbor in G[node]):
-                merged.add(node)
-        merged |= comp
-
     logger.info(
-        f"Merged {len(components)} components into one connected partition with {len(merged)} nodes.")
-    return merged
+        f"Partition was disconnected; returning largest connected component with {len(largest_component)} nodes out of {len(Pi)}."
+    )
+    return largest_component
 
 
 def split_partition(G: Dict, Pi: Set, ci: int) -> List[Set]:
