@@ -246,12 +246,34 @@ def merge_disconnected_areas(G: Dict, U: Set, Pi: Set) -> Set:
     """
     # Build the induced subgraph for nodes in Pi.
     induced_adj = {node: {nbr for nbr in G[node] if nbr in Pi} for node in Pi}
-    # Prepare input for connected component analysis.
+
+    # Check if there are any internal edges.
+    if all(len(neighbors) == 0 for neighbors in induced_adj.values()):
+        # All nodes are isolated in Pi.
+        if len(Pi) > 1:
+            # Artificially connect them by choosing a dummy node.
+            dummy = next(iter(Pi))
+            # Create a temporary adjacency list where each node (except the dummy)
+            # is connected to the dummy and vice versa.
+            connected_adj = {node: [] for node in Pi}
+            for node in Pi:
+                if node == dummy:
+                    connected_adj[node] = [n for n in Pi if n != dummy]
+                else:
+                    connected_adj[node] = [dummy]
+            # Run connected component analysis on this artificial graph.
+            components = find_connected_components(connected_adj)
+            # We expect a single component now.
+            return Pi
+        else:
+            return Pi
+
+    # Otherwise, if there are some edges, compute connected components normally.
     comp_input = {node: list(neighbors)
                   for node, neighbors in induced_adj.items()}
     components = find_connected_components(comp_input)
 
-    # If all connected components have size 1, return the original partition.
+    # If all connected components have size 1, return Pi.
     if all(len(comp) == 1 for comp in components):
         return Pi
 
@@ -319,4 +341,5 @@ def split_partition(G: Dict, Pi: Set, ci: int) -> List[Set]:
 
     logger.info(
         f"Split partition into {len(partitions)} partitions with target cardinality {ci}.")
+
     return partitions
