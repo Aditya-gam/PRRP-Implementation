@@ -219,35 +219,10 @@ def merge_disconnected_areas(G: Dict, U: Set, Pi: Set) -> Set:
 
     Process:
         - Build the induced subgraph for the nodes in Pi.
-        - Compute its connected components (using DFS-based connected component analysis).
-        - If multiple components exist, merge them by (at minimum) adopting the largest component.
+        - Compute its connected components using DFS.
+        - If all connected components are singletons (isolated nodes), return the original partition.
+          Otherwise, return the largest connected component.
     """
-    # # Build the induced subgraph.
-    # induced_adj = {node: {nbr for nbr in G[node] if nbr in Pi} for node in Pi}
-    # # Convert to the format expected by find_connected_components (list-based neighbors).
-    # comp_input = {node: list(neighbors)
-    #               for node, neighbors in induced_adj.items()}
-    # components = find_connected_components(comp_input)
-
-    # if len(components) <= 1:
-    #     return Pi
-
-    # largest_component = max(components, key=len)
-    # merged = set(largest_component)
-
-    # # Merge other components if any node within them connects to the largest component.
-    # for comp in components:
-    #     if comp == largest_component:
-    #         continue
-    #     for node in comp:
-    #         if any(neighbor in largest_component for neighbor in G[node]):
-    #             merged.add(node)
-    #     merged |= comp
-
-    # logger.info(
-    #     f"Merged {len(components)} components into one connected partition with {len(merged)} nodes.")
-    # return merged
-
     # Build the induced subgraph for nodes in Pi.
     induced_adj = {node: {nbr for nbr in G[node] if nbr in Pi} for node in Pi}
     # Prepare input for connected component analysis.
@@ -255,14 +230,16 @@ def merge_disconnected_areas(G: Dict, U: Set, Pi: Set) -> Set:
                   for node, neighbors in induced_adj.items()}
     components = find_connected_components(comp_input)
 
-    if len(components) <= 1:
+    # If all connected components have size 1, return the original partition.
+    if all(len(comp) == 1 for comp in components):
         return Pi
 
-    # Return only the largest connected component.
+    # Otherwise, return only the largest connected component.
     largest_component = max(components, key=len)
     logger.info(
         f"Partition was disconnected; returning largest connected component with {len(largest_component)} nodes out of {len(Pi)}."
     )
+
     return largest_component
 
 
