@@ -372,18 +372,16 @@ def split_region(region: Set[int],
         f"excess areas to remove = {excess_count}."
     )
 
-    # Remove excess boundary areas until the region size matches the target.
     adjusted_region = region.copy()
     removed_areas = set()
 
     while excess_count > 0:
         boundary = find_boundary_areas(
             adjusted_region, {k: list(v) for k, v in adj_list.items()})
-
         if not boundary:
             logger.warning(
                 "No more removable boundary areas without risking discontiguity.")
-            break  # Stop if further removals could fragment the region
+            break
 
         area_to_remove = random.choice(list(boundary))
         adjusted_region.remove(area_to_remove)
@@ -392,30 +390,23 @@ def split_region(region: Set[int],
         logger.info(
             f"Removed boundary area {area_to_remove} from region; {excess_count} removals remaining.")
 
-        # After removal, check spatial contiguity by building a subgraph.
-        sub_adj: Dict[int, List[int]] = {
-            area: list(adj_list.get(area, set()) & adjusted_region) for area in adjusted_region
-        }
+        sub_adj = {area: list(adj_list.get(area, set()) & adjusted_region)
+                   for area in adjusted_region}
         components = find_connected_components(sub_adj)
-
         if len(components) > 1:
-            # Keep only the largest connected component.
             largest_component = max(components, key=len)
             removed_areas.update(adjusted_region - largest_component)
             adjusted_region = largest_component
             logger.warning(
-                f"Region split into multiple components. Keeping largest component with {len(adjusted_region)} areas; removed {removed_areas}."
-            )
+                f"Region split into multiple components. Keeping largest component with {len(adjusted_region)} areas; removed {adjusted_region - largest_component}.")
 
-    # If the final adjusted region is smaller than `target_cardinality`, reassign some removed areas
     if len(adjusted_region) < target_cardinality:
         needed_count = target_cardinality - len(adjusted_region)
         logger.warning(
             f"Final region too small ({len(adjusted_region)}). Reassigning {needed_count} areas from removed areas.")
-
         while needed_count > 0 and removed_areas:
-            # Add back a removed area that is adjacent to the current region
-            for area in removed_areas:
+            # iterate over a copy to avoid modification during iteration
+            for area in list(removed_areas):
                 if any(neighbor in adjusted_region for neighbor in adj_list.get(area, [])):
                     adjusted_region.add(area)
                     removed_areas.remove(area)
@@ -425,7 +416,6 @@ def split_region(region: Set[int],
 
     logger.info(
         f"Region splitting complete. Final region size is {len(adjusted_region)} areas.")
-
     return adjusted_region
 
 # ==============================
@@ -467,10 +457,12 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int], solu
         temp_available_areas = available_areas.copy()
         try:
             for target_cardinality in cardinalities:
-                logger.info(f"Growing region with target size: {target_cardinality}")
+                logger.info(
+                    f"Growing region with target size: {target_cardinality}")
 
                 # Grow the region.
-                region, no_of_retries = grow_region(adj_list, temp_available_areas, target_cardinality)
+                region, no_of_retries = grow_region(
+                    adj_list, temp_available_areas, target_cardinality)
                 # Only perform merge/split if there remain unassigned areas.
                 if temp_available_areas:
                     merged_region = merge_disconnected_areas(
@@ -481,7 +473,8 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int], solu
                     # If no areas remain unassigned, no merge or split is needed.
                     final_region = region
                 regions.append(final_region)
-                logger.info(f"Region finalized with {len(final_region)} areas.")
+                logger.info(
+                    f"Region finalized with {len(final_region)} areas.")
             valid_solutions.append(regions)
         except Exception as e:
             logger.error(f"Failed to generate region: {e}")
@@ -591,7 +584,7 @@ if __name__ == "__main__":
     # Define the number of regions to create.
     total_areas = len(sample_areas)
     num_regions = random.randint(2, total_areas // 2)
-    
+
     # Define random target cardinalities for each region such that their sum is equal to the total area points.
     cardinalities = [2] * num_regions
     remaining = total_areas - 2 * num_regions
@@ -606,7 +599,8 @@ if __name__ == "__main__":
     random.shuffle(cardinalities)
 
     logger.info("Running a single PRRP solution...")
-    single_solution = run_prrp(sample_areas, num_regions, cardinalities, solutions_count)
+    single_solution = run_prrp(
+        sample_areas, num_regions, cardinalities, solutions_count)
     logger.info(f"Single PRRP solution: {single_solution}")
 
     logger.info("Running parallel PRRP solutions...")
