@@ -1,8 +1,10 @@
+import os
 import random
 import logging
 from typing import Dict, Set, List, Any
 from multiprocessing import Pool, cpu_count
 
+from src.prrp_data_loader import load_shapefile
 from src.utils import (
     construct_adjacency_list,
     find_connected_components,
@@ -532,15 +534,21 @@ def run_parallel_prrp(areas: List[Dict[str, Any]],
 # 8. Main Execution Block
 # ==============================
 if __name__ == "__main__":
-    # Example Usage:
-    # Create dummy spatial data for testing. In practice, these would be your actual spatial areas.
-    sample_areas = [
-        {'id': i, 'geometry': None} for i in range(50)
-    ]
-    # Define the number of regions and their target cardinalities.
+    # Load the shapefile data.
+    shapefile_path = os.path.abspath(os.path.join(os.getcwd(), 'data/cb_2015_42_tract_500k/cb_2015_42_tract_500k.shp')) # get the absolute path to the shapefile.
+    print(f"Path to shape file : {shapefile_path}")
+
+    sample_areas = load_shapefile(shapefile_path)
+
+    # Define the number of regions to create.
     num_regions = 5
-    # For example, each region should have 10 areas.
-    cardinalities = [10, 10, 10, 10, 10]
+
+    # Define random target cardinalities for each region such that their sum is equal to the total area points.
+    total_areas = len(sample_areas)
+    
+    cardinalities = [random.randint(5, 15) for _ in range(num_regions - 1)]
+    
+    cardinalities.append(total_areas - sum(cardinalities)) 
 
     logger.info("Running a single PRRP solution...")
     single_solution = run_prrp(sample_areas, num_regions, cardinalities)

@@ -1,4 +1,6 @@
+import os
 import networkx as nx
+import geopandas as gpd
 import logging
 import numpy as np
 
@@ -10,6 +12,35 @@ formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(messag
 handler.setFormatter(formatter)
 if not logger.handlers:
     logger.addHandler(handler)
+
+def load_shapefile(file_path: str) -> list:
+    """
+    Loads a shapefile into a list of mappings between area IDs and their gemetry.
+
+    Parameters:
+        file_path: Path to the shapefile
+    
+    Returns:
+        list: List of mappings between area IDs and their geometry
+    """
+    try:
+        gdf = gpd.read_file(file_path)
+    except FileNotFoundError:
+        logger.error(f"File not found: {file_path}")
+        return None
+    except Exception as e:
+        logger.error(f"Error reading file {file_path}: {e}")
+        return None
+    
+    try:
+        area_data = []
+        for idx, row in gdf.iterrows():
+            area_data.append({"id": row["GEOID"], "geometry": row["geometry"]})
+    except Exception as e:
+        logger.error(f"Error parsing shapefile: {e}")
+        return None
+    
+    return area_data
 
 def load_metis_graph(file_path: str) -> (nx.Graph, dict):
     """
