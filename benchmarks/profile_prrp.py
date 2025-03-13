@@ -20,20 +20,20 @@ Usage:
     python benchmark/profile_prrp.py
 """
 
-
-from src.utils import find_connected_components, load_graph_from_metis, construct_adjacency_list, random_seed_selection
 from src.graph_prrp import run_graph_prrp, grow_partition, merge_disconnected_areas, split_partition
+from src.utils import find_connected_components, load_graph_from_metis, construct_adjacency_list, random_seed_selection
 from memory_profiler import memory_usage
-import cProfile
-import pstats
 import random
+import pstats
+import cProfile
 import os
 import sys
 # Add the project root (one level up) to sys.path so that the src module can be imported.
 sys.path.insert(0, os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..")))
 
-# Import the PRRP functions from src
+
+# Now import the PRRP functions from src
 
 # Set up file paths (adjust if necessary)
 GRAPH_FILE_PATH = os.path.join(
@@ -56,7 +56,7 @@ def profile_execution_time(graph):
         graph (dict): The input graph as an adjacency list.
 
     Returns:
-        pstats.Stats: The pstats object containing the profiling statistics.
+        tuple: (partitions, profiler) where partitions is the PRRP result and profiler contains timing stats.
     """
     profiler = cProfile.Profile()
     profiler.enable()
@@ -142,7 +142,6 @@ def main():
         run_graph_prrp, graph, NUM_PARTITIONS, TARGET_CARDINALITY, MAX_RETRIES, MAX_SIZE)
 
     # For demonstration, we profile one more function: construct_adjacency_list.
-    from src.utils import construct_adjacency_list
     _, peak_memory_adj, mem_usage_adj = profile_memory_usage(
         construct_adjacency_list, graph)
 
