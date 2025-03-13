@@ -3,10 +3,9 @@ Graph-Based PRRP Implementation
 
 This module implements a graph partitioning algorithm using the principles of
 P-Regionalization through Recursive Partitioning (PRRP). It ensures:
-  - Connectivity preservation via precomputed articulation points.
-  - Efficient handling of graphs via an optimized adjacency list.
-  - Recursive partitioning with parallelized partition growth, merging of disconnected areas,
-    and splitting of oversized partitions.
+    - Connectivity preservation via articulation point checks (using Tarjan’s Algorithm helpers).
+    - Efficient handling of graphs through an adjacency list (via construct_adjacency_list).
+    - Recursive partitioning with growth, merging of disconnected areas, and splitting of oversized partitions.
     
 The graph input is expected to be provided in METIS format (parsed via metis_parser.py)
 or already as an adjacency list. This implementation leverages utilities from utils.py.
@@ -18,8 +17,6 @@ import heapq
 from collections import deque
 from typing import Dict, Set, List
 
-from multiprocessing import Manager, Pool, cpu_count
-
 # Import required functions from utils.
 from src.utils import (
     construct_adjacency_list,
@@ -27,210 +24,93 @@ from src.utils import (
     random_seed_selection,
     find_connected_components,
     find_boundary_areas,
-    DisjointSetUnion,
+    DisjointSetUnion,  # For union-find operations
+    # is_articulation_point is no longer needed in grow_partition now
 )
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int, precomputed_ap: Set = None, lock=None) -> Set:
-    """
-    Grows a partition by expanding from a seed until reaching the target cardinality.
-    Uses a heap-based priority queue for expansion based on the number of unassigned neighbors,
-    and uses a precomputed set of articulation points to filter candidates.
-
-    Optionally, if a lock is provided, operations on the shared unassigned set U are done
-    in a thread/process-safe manner.
-
-    If precomputed_ap is not provided, it is computed within the function.
-
-    Parameters:
-        G (Dict): Graph as an adjacency list.
-        U (Set): Shared set of unassigned nodes (expected to be a Manager().set() in parallel mode).
-        p (int): Identifier of the current partition (for logging).
-        c (int): Target number of nodes for the partition.
-        MR (int): Maximum number of retries if growth stalls.
-        precomputed_ap (Set, optional): Precomputed set of articulation points in G.
-        lock: A lock for safe updates to U (optional).
-
-    Returns:
-        Set: The grown partition.
-    """
-    if precomputed_ap is None:
-        from src.utils import find_articulation_points
-        precomputed_ap = find_articulation_points(
-            {node: list(neighbors) for node, neighbors in G.items()})
-
-    # If not enough unassigned nodes remain, return them all.
-    if len(U) < c:
-        partition = set(U)
-        if lock:
-            with lock:
-                U.clear()
-        else:
-            U.clear()
-        return partition
-
-    partition = set()
-    attempts = 0
-
-    try:
-        seed = random_seed_selection(G, set(), method="gapless")
-        if seed not in U:
-            seed = random.choice(list(U))
-    except ValueError:
-        seed = random.choice(list(U))
-
-    partition.add(seed)
-    if lock:
-        with lock:
-            U.discard(seed)
-    else:
-        U.discard(seed)
-
-    # Use a heap-based priority queue for expansion.
-    heap = []
-
-    def get_priority(node):
-        # Priority: negative count of unassigned neighbors
-        return -sum(1 for nbr in G[node] if nbr in U)
-    heapq.heappush(heap, (get_priority(seed), seed))
-
-    while heap and len(partition) < c:
-        prio, current = heapq.heappop(heap)
-        for nbr in G[current]:
-            if nbr in U and nbr not in precomputed_ap:
-                partition.add(nbr)
-                if lock:
-                    with lock:
-                        U.discard(nbr)
-                else:
-                    U.discard(nbr)
-                heapq.heappush(heap, (get_priority(nbr), nbr))
-                if len(partition) >= c:
-                    break
-        if not heap and len(partition) < c and U:
-            adjacent_candidates = set()
-            for node in partition:
-                adjacent_candidates |= (G[node] & U)
-            new_seed = random.choice(
-                list(adjacent_candidates)) if adjacent_candidates else random.choice(list(U))
-            partition.add(new_seed)
-            if lock:
-                with lock:
-                    U.discard(new_seed)
-            else:
-                U.discard(new_seed)
-            heapq.heappush(heap, (get_priority(new_seed), new_seed))
-            attempts += 1
-            if attempts >= MR:
-                logger.warning(
-                    f"Partition {p} growth stalled after {MR} retries.")
-                break
-
-    return partition
-
-
-def parallel_grow_partition(args) -> Set:
-    """
-    Worker function for parallel partition growth.
-    Unpacks the arguments and calls grow_partition() with a shared lock.
-
-    Parameters:
-        args: Tuple containing (G, U, partition_id, c, MR, precomputed_ap, lock)
-
-    Returns:
-        Set: The grown partition.
-    """
-    G, U, partition_id, c, MR, precomputed_ap, lock = args
-    return grow_partition(G, U, partition_id, c, MR, precomputed_ap, lock)
-
-
 def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
     """
-    Main PRRP function to partition a graph. This version parallelizes the partition growth
-    phase by launching multiple processes concurrently.
+    Main PRRP function to partition a graph.
 
     Parameters:
-        G (Dict): Input graph as an adjacency list.
+        G (Dict): Input graph as an adjacency list (node -> neighbors).
         p (int): Desired number of partitions.
-        C (int): Target partition cardinality.
+        C (int): Target partition cardinality (ideal number of nodes per partition).
         MR (int): Maximum number of retries for growing a partition.
         MS (int): Maximum allowed partition size before splitting.
 
     Returns:
         Dict[int, Set]: Mapping of partition IDs to sets of nodes.
     """
-    # Build the efficient adjacency list.
+    # Build or convert the graph into an efficient adjacency list.
     G_adj = construct_adjacency_list(G)
     all_nodes = set(G_adj.keys())
 
     if len(all_nodes) < p:
-        logger.error("Number of nodes is less than the desired partitions.")
+        logger.error(
+            "Number of nodes is less than the number of desired partitions.")
         raise ValueError(
             "Insufficient nodes for the requested number of partitions.")
+
     if C > len(all_nodes):
-        logger.error("Target partition cardinality exceeds total nodes.")
+        logger.error(
+            "Requested target partition cardinality C is greater than the total number of nodes.")
         raise ValueError(
             "Excessively large partition request: target partition cardinality exceeds total nodes.")
 
-    # Precompute articulation points once.
     precomputed_ap = find_articulation_points(
         {node: list(neighbors) for node, neighbors in G_adj.items()})
 
     partitions = {}
     partition_id = 1
+    unassigned = set(all_nodes)
 
-    # Use a Manager to share the unassigned set and a Lock among processes.
-    with Manager() as manager:
-        U_shared = manager.set(all_nodes)
-        lock = manager.Lock()
-        pool = Pool(processes=cpu_count())
+    while unassigned and partition_id <= p:
+        assigned_nodes = set().union(*partitions.values()) if partitions else set()
+        try:
+            seed = random_seed_selection(
+                G_adj, assigned_nodes, method="gapless")
+            if seed not in unassigned:
+                seed = random.choice(list(unassigned))
+        except ValueError:
+            seed = random.choice(list(unassigned))
 
-        # For each partition, launch a parallel grow_partition.
-        tasks = []
-        while U_shared and partition_id <= p:
-            # Select a seed sequentially for consistency.
-            assigned_nodes = set().union(*partitions.values()) if partitions else set()
-            try:
-                seed = random_seed_selection(
-                    G_adj, assigned_nodes, method="gapless")
-                if seed not in U_shared:
-                    seed = random.choice(list(U_shared))
-            except ValueError:
-                seed = random.choice(list(U_shared))
-            # Remove seed from shared set.
-            with lock:
-                U_shared.discard(seed)
-            # Create a task for partition growth.
-            task_args = (G_adj, U_shared, partition_id,
-                         C, MR, precomputed_ap, lock)
-            tasks.append(task_args)
+        grown_partition = grow_partition(
+            G_adj, unassigned, partition_id, C, MR, precomputed_ap)
+        logger.info(
+            f"Grew partition {partition_id} with {len(grown_partition)} nodes.")
+
+        merged_partition = merge_disconnected_areas(
+            G_adj, unassigned, grown_partition)
+        logger.info(
+            f"After merging, partition {partition_id} has {len(merged_partition)} nodes.")
+
+        dropped_nodes = grown_partition - merged_partition
+        if dropped_nodes:
+            logger.info(
+                f"Returning {len(dropped_nodes)} dropped nodes to unassigned.")
+            unassigned |= dropped_nodes
+
+        if len(merged_partition) > MS:
+            logger.info(
+                f"Partition {partition_id} exceeds maximum size {MS}. Splitting...")
+            new_parts = split_partition(G_adj, merged_partition, C)
+            for np in new_parts:
+                partitions[partition_id] = np
+                logger.info(
+                    f"Created partition {partition_id} with {len(np)} nodes after splitting.")
+                partition_id += 1
+        else:
+            partitions[partition_id] = merged_partition
             partition_id += 1
 
-        # Map tasks in parallel.
-        results = pool.map(parallel_grow_partition, tasks)
-        pool.close()
-        pool.join()
+        unassigned -= merged_partition
 
-        # Reassemble partitions from parallel results.
-        # Reset partition_id to 1 and build dictionary.
-        partitions = {i+1: results[i] for i in range(len(results))}
-
-        # After parallel growth, update U_shared (convert to a normal set for further processing).
-        unassigned = set(U_shared)
-
-    # Sequentially perform merging, splitting, and final assignment.
-    for pid, part in partitions.items():
-        merged_partition = merge_disconnected_areas(G_adj, set(), part)
-        partitions[pid] = merged_partition
-
-    # Remove partition nodes from unassigned.
-    for part in partitions.values():
-        unassigned -= part
-
-    # Final assignment: incrementally compute candidate scores.
+    # Final assignment: Instead of using sum() and any() repeatedly, we compute the candidate score incrementally.
     while unassigned:
         node = unassigned.pop()
         best_pid = None
@@ -250,7 +130,6 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
                                key=lambda item: len(item[1]))[0]
             partitions[smallest_pid].add(node)
 
-    # Final post-processing: ensure connectivity of each partition.
     for pid, part in partitions.items():
         induced = {n: list(G_adj[n] & part) for n in part}
         comps = find_connected_components(induced)
@@ -272,6 +151,85 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
                         G_adj[main_node].add(node)
 
     return partitions
+
+
+def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int, precomputed_ap: Set = None) -> Set:
+    """
+    Grows a partition by expanding from a seed until reaching the target cardinality.
+    Uses a heap-based priority queue for expansion based on the number of unassigned neighbors,
+    and uses the precomputed set of articulation points to filter candidates.
+
+    If precomputed_ap is not provided, it is computed within the function.
+
+    Parameters:
+        G (Dict): Graph as an adjacency list.
+        U (Set): Set of unassigned nodes.
+        p (int): Identifier of the current partition.
+        c (int): Target number of nodes for the partition.
+        MR (int): Maximum number of retries if growth stalls.
+        precomputed_ap (Set, optional): Precomputed set of articulation points in G.
+
+    Returns:
+        Set: The grown partition.
+    """
+    if precomputed_ap is None:
+        from src.utils import find_articulation_points
+        precomputed_ap = find_articulation_points(
+            {node: list(neighbors) for node, neighbors in G.items()})
+
+    if len(U) < c:
+        partition = set(U)
+        U.clear()
+        return partition
+
+    partition = set()
+    attempts = 0
+
+    try:
+        seed = random_seed_selection(G, set(), method="gapless")
+        if seed not in U:
+            seed = random.choice(list(U))
+    except ValueError:
+        seed = random.choice(list(U))
+
+    partition.add(seed)
+    U.discard(seed)
+    # Use a heap-based priority queue. Each element is (priority, node)
+    # Priority is defined as -#unassigned_neighbors (so higher connectivity gets higher priority).
+    heap = []
+
+    def get_priority(node):
+        # Count unassigned neighbors
+        return -sum(1 for nbr in G[node] if nbr in U)
+    heapq.heappush(heap, (get_priority(seed), seed))
+
+    while heap and len(partition) < c:
+        prio, current = heapq.heappop(heap)
+        # Expand from current: consider its neighbors that are unassigned and not in precomputed_ap.
+        for nbr in G[current]:
+            if nbr in U and nbr not in precomputed_ap:
+                partition.add(nbr)
+                U.discard(nbr)
+                heapq.heappush(heap, (get_priority(nbr), nbr))
+                if len(partition) >= c:
+                    break
+        if not heap and len(partition) < c and U:
+            # If the heap is empty, pick a new candidate from neighbors of current partition.
+            adjacent_candidates = set()
+            for node in partition:
+                adjacent_candidates |= (G[node] & U)
+            new_seed = random.choice(
+                list(adjacent_candidates)) if adjacent_candidates else random.choice(list(U))
+            partition.add(new_seed)
+            U.discard(new_seed)
+            heapq.heappush(heap, (get_priority(new_seed), new_seed))
+            attempts += 1
+            if attempts >= MR:
+                logger.warning(
+                    f"Partition {p} growth stalled after {MR} retries.")
+                break
+
+    return partition
 
 
 def merge_disconnected_areas(G: Dict, U: Set, Pi: Set) -> Set:
