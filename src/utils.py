@@ -22,6 +22,7 @@ Functions:
 import logging
 import random
 import concurrent.futures
+import heapq
 from multiprocessing import Pool, cpu_count
 import os
 import copy
@@ -389,34 +390,45 @@ def random_seed_selection(adj_list: Dict[Any, List[Any]], assigned_regions: Set[
     Returns:
         A selected seed node.
     """
+    # unassigned = set(adj_list.keys()) - assigned_regions
+    # if not unassigned:
+    #     logger.error("No unassigned nodes available for seed selection.")
+    #     raise ValueError("No unassigned nodes available.")
+
+    # if method == "gapless":
+    #     # Precompute candidate scores for each node based on count of assigned neighbors.
+    #     candidate_scores = {node: sum(
+    #         1 for nbr in adj_list[node] if nbr in assigned_regions) for node in unassigned}
+    #     # Filter nodes that have at least one assigned neighbor.
+    #     candidate_seeds = [node for node,
+    #                        score in candidate_scores.items() if score > 0]
+    #     if candidate_seeds:
+    #         # Choose the node with the highest score, breaking ties randomly.
+    #         max_score = max(candidate_scores[node] for node in candidate_seeds)
+    #         best_candidates = [
+    #             node for node in candidate_seeds if candidate_scores[node] == max_score]
+    #         chosen = random.choice(best_candidates)
+    #         logger.info(
+    #             f"Selected gapless seed: {chosen} with score {max_score}")
+    #         return chosen
+    #     chosen = random.choice(list(unassigned))
+    #     logger.info(
+    #         f"No gapless candidate found, selected random seed: {chosen}")
+    #     return chosen
+    # else:
+    #     logger.error(f"Unknown seed selection method: {method}")
+    #     raise ValueError(f"Unknown seed selection method: {method}")
     unassigned = set(adj_list.keys()) - assigned_regions
     if not unassigned:
-        logger.error("No unassigned nodes available for seed selection.")
         raise ValueError("No unassigned nodes available.")
 
-    if method == "gapless":
-        # Precompute candidate scores for each node based on count of assigned neighbors.
-        candidate_scores = {node: sum(
-            1 for nbr in adj_list[node] if nbr in assigned_regions) for node in unassigned}
-        # Filter nodes that have at least one assigned neighbor.
-        candidate_seeds = [node for node,
-                           score in candidate_scores.items() if score > 0]
-        if candidate_seeds:
-            # Choose the node with the highest score, breaking ties randomly.
-            max_score = max(candidate_scores[node] for node in candidate_seeds)
-            best_candidates = [
-                node for node in candidate_seeds if candidate_scores[node] == max_score]
-            chosen = random.choice(best_candidates)
-            logger.info(
-                f"Selected gapless seed: {chosen} with score {max_score}")
-            return chosen
-        chosen = random.choice(list(unassigned))
-        logger.info(
-            f"No gapless candidate found, selected random seed: {chosen}")
-        return chosen
-    else:
-        logger.error(f"Unknown seed selection method: {method}")
-        raise ValueError(f"Unknown seed selection method: {method}")
+    # Compute connectivity scores only once
+    scores = {node: sum(
+        1 for nbr in adj_list[node] if nbr in assigned_regions) for node in unassigned}
+    best_candidates = heapq.nlargest(
+        10, scores, key=scores.get)  # Get top 10 nodes
+
+    return random.choice(best_candidates)
 
 
 def load_graph_from_metis(file_path: str) -> Dict[int, List[int]]:

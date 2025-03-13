@@ -252,33 +252,35 @@ def merge_disconnected_areas(G: Dict, U: Set, Pi: Set) -> Set:
     """
     # Build the induced subgraph for nodes in Pi.
     induced_adj = {node: {nbr for nbr in G[node] if nbr in Pi} for node in Pi}
-    dsu = DisjointSetUnion()
-    for node in induced_adj:
-        dsu.parent[node] = node
-    # Union all connected nodes.
+    dsu = {node: node for node in Pi}  # Replace class with direct dictionary
+
+    def find(x):
+        while x != dsu[x]:
+            dsu[x] = dsu[dsu[x]]  # Path compression
+            x = dsu[x]
+        return x
+
+    def union(x, y):
+        dsu[find(y)] = find(x)
+
     for node, neighbors in induced_adj.items():
         for nbr in neighbors:
-            dsu.union(node, nbr)
-    # Group nodes by their representative.
+            union(node, nbr)
+
     groups = {}
-    for node in induced_adj:
-        rep = dsu.find(node)
+    for node in Pi:
+        rep = find(node)
         groups.setdefault(rep, set()).add(node)
-    # If there is only one group, Pi is connected.
-    if len(groups) == 1:
-        return Pi
-    # Otherwise, choose the largest group as the main component.
+
     main_comp = max(groups.values(), key=len)
     main_node = next(iter(main_comp))
-    # For each smaller group, add an artificial edge to main_node.
+
     for group in groups.values():
         if group is main_comp:
             continue
         for node in group:
-            if main_node not in G[node]:
-                G[node].add(main_node)
-            if node not in G[main_node]:
-                G[main_node].add(node)
+            G[node].add(main_node)
+            G[main_node].add(node)
 
     return Pi
 
