@@ -23,6 +23,7 @@ from src.utils import (
     random_seed_selection,
     find_connected_components,
     find_boundary_areas,
+    DisjointSetUnion,  # For union-find operations
     # is_articulation_point is no longer needed in grow_partition now
 )
 
