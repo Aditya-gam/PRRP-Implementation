@@ -339,7 +339,8 @@ def split_region(region: Set[int],
     If the region exceeds its target cardinality (due to the merging phase), this function
     computes the number of excess areas and removes them using a randomized boundary area
     removal strategy. After removals, if the region becomes fragmented into multiple connected
-    components, only the largest contiguous component is retained.
+    components, the largest contiguous component is retained. If the retained component is 
+    smaller than `target_cardinality`, previously removed areas are reassigned.
 
     Parameters:
         region (Set[int]): The set of area IDs currently in the region.
@@ -371,20 +372,55 @@ def split_region(region: Set[int],
     )
 
     # Remove excess boundary areas until the region size matches the target.
-    adjusted_region = remove_boundary_areas(region, excess_count, adj_list)
+    adjusted_region = region.copy()
+    removed_areas = set()
 
-    # Final connectivity check: rebuild a subgraph and verify that the region is contiguous.
-    sub_adj_final: Dict[int, List[int]] = {
-        area: list(adj_list.get(area, set()) & adjusted_region) for area in adjusted_region
-    }
-    final_components = find_connected_components(sub_adj_final)
-    if len(final_components) > 1:
-        largest_component = max(final_components, key=len)
+    while excess_count > 0:
+        boundary = find_boundary_areas(
+            adjusted_region, {k: list(v) for k, v in adj_list.items()})
+
+        if not boundary:
+            logger.warning(
+                "No more removable boundary areas without risking discontiguity.")
+            break  # Stop if further removals could fragment the region
+
+        area_to_remove = random.choice(list(boundary))
+        adjusted_region.remove(area_to_remove)
+        removed_areas.add(area_to_remove)
+        excess_count -= 1
+        logger.info(
+            f"Removed boundary area {area_to_remove} from region; {excess_count} removals remaining.")
+
+        # After removal, check spatial contiguity by building a subgraph.
+        sub_adj: Dict[int, List[int]] = {
+            area: list(adj_list.get(area, set()) & adjusted_region) for area in adjusted_region
+        }
+        components = find_connected_components(sub_adj)
+
+        if len(components) > 1:
+            # Keep only the largest connected component.
+            largest_component = max(components, key=len)
+            removed_areas.update(adjusted_region - largest_component)
+            adjusted_region = largest_component
+            logger.warning(
+                f"Region split into multiple components. Keeping largest component with {len(adjusted_region)} areas; removed {removed_areas}."
+            )
+
+    # If the final adjusted region is smaller than `target_cardinality`, reassign some removed areas
+    if len(adjusted_region) < target_cardinality:
+        needed_count = target_cardinality - len(adjusted_region)
         logger.warning(
-            f"After splitting, region is fragmented into {len(final_components)} components; "
-            f"keeping largest component with {len(largest_component)} areas."
-        )
-        adjusted_region = largest_component
+            f"Final region too small ({len(adjusted_region)}). Reassigning {needed_count} areas from removed areas.")
+
+        while needed_count > 0 and removed_areas:
+            # Add back a removed area that is adjacent to the current region
+            for area in removed_areas:
+                if any(neighbor in adjusted_region for neighbor in adj_list.get(area, [])):
+                    adjusted_region.add(area)
+                    removed_areas.remove(area)
+                    needed_count -= 1
+                    if needed_count == 0:
+                        break
 
     logger.info(
         f"Region splitting complete. Final region size is {len(adjusted_region)} areas.")
@@ -535,7 +571,9 @@ def run_parallel_prrp(areas: List[Dict[str, Any]],
 # ==============================
 if __name__ == "__main__":
     # Load the shapefile data.
-    shapefile_path = os.path.abspath(os.path.join(os.getcwd(), 'data/cb_2015_42_tract_500k/cb_2015_42_tract_500k.shp')) # get the absolute path to the shapefile.
+    # get the absolute path to the shapefile.
+    shapefile_path = os.path.abspath(os.path.join(
+        os.getcwd(), 'data/cb_2015_42_tract_500k/cb_2015_42_tract_500k.shp'))
     print(f"Path to shape file : {shapefile_path}")
 
     sample_areas = load_shapefile(shapefile_path)
@@ -545,10 +583,10 @@ if __name__ == "__main__":
 
     # Define random target cardinalities for each region such that their sum is equal to the total area points.
     total_areas = len(sample_areas)
-    
+
     cardinalities = [random.randint(5, 15) for _ in range(num_regions - 1)]
-    
-    cardinalities.append(total_areas - sum(cardinalities)) 
+
+    cardinalities.append(total_areas - sum(cardinalities))
 
     logger.info("Running a single PRRP solution...")
     single_solution = run_prrp(sample_areas, num_regions, cardinalities)

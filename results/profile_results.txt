@@ -1,0 +1,127 @@
+===== PRRP Execution Time Profiling =====
+
+         45688983 function calls in 15.486 seconds
+
+   Ordered by: cumulative time
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.404    0.404   15.486   15.486 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:33(run_graph_prrp)
+       10    0.158    0.016   11.791    1.179 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:152(grow_partition)
+       10    7.450    0.745   10.202    1.020 /Volumes/coding/projects/PRRP-Implementation/src/utils.py:166(find_articulation_points)
+  2985500    1.584    0.000    3.456    0.000 {built-in method builtins.any}
+       20    0.100    0.005    2.846    0.142 /Volumes/coding/projects/PRRP-Implementation/src/utils.py:356(random_seed_selection)
+       20    0.431    0.022    2.744    0.137 /Volumes/coding/projects/PRRP-Implementation/src/utils.py:378(<setcomp>)
+ 15191250    1.249    0.000    1.249    0.000 /Volumes/coding/projects/PRRP-Implementation/src/utils.py:378(<genexpr>)
+       10    0.928    0.093    0.928    0.093 /Volumes/coding/projects/PRRP-Implementation/src/utils.py:176(<dictcomp>)
+  7999608    0.810    0.000    0.810    0.000 {built-in method builtins.next}
+  6000936    0.779    0.000    0.782    0.000 {built-in method builtins.min}
+  7184919    0.633    0.000    0.633    0.000 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:117(<genexpr>)
+    97682    0.037    0.000    0.220    0.000 {built-in method builtins.max}
+       20    0.155    0.008    0.211    0.011 /Volumes/coding/projects/PRRP-Implementation/src/utils.py:225(find_connected_components)
+   114208    0.033    0.000    0.183    0.000 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:120(<lambda>)
+        1    0.000    0.000    0.157    0.157 /Volumes/coding/projects/PRRP-Implementation/src/utils.py:74(construct_adjacency_list)
+        1    0.152    0.152    0.156    0.156 /Volumes/coding/projects/PRRP-Implementation/src/utils.py:95(<dictcomp>)
+   114208    0.047    0.000    0.150    0.000 {built-in method builtins.sum}
+   462804    0.103    0.000    0.103    0.000 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:120(<genexpr>)
+       10    0.097    0.010    0.097    0.010 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:130(<dictcomp>)
+  1101112    0.088    0.000    0.088    0.000 {method 'get' of 'dict' objects}
+  1449598    0.070    0.000    0.070    0.000 {method 'append' of 'list' objects}
+  1000008    0.066    0.000    0.066    0.000 {built-in method builtins.iter}
+  1335390    0.062    0.000    0.062    0.000 {method 'pop' of 'list' objects}
+   310952    0.021    0.000    0.021    0.000 {method 'add' of 'set' objects}
+   100348    0.007    0.000    0.007    0.000 {method 'items' of 'dict' objects}
+    99000    0.006    0.000    0.006    0.000 {method 'pop' of 'set' objects}
+       61    0.000    0.000    0.005    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:1479(info)
+   100123    0.005    0.000    0.005    0.000 {built-in method builtins.isinstance}
+       61    0.000    0.000    0.005    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:1610(_log)
+       10    0.000    0.000    0.004    0.000 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:238(merge_disconnected_areas)
+    13260    0.002    0.000    0.003    0.000 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:125(<lambda>)
+       61    0.000    0.000    0.002    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:1636(handle)
+       61    0.000    0.000    0.002    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:1690(callHandlers)
+       41    0.000    0.000    0.002    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:965(handle)
+       41    0.000    0.000    0.002    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:1098(emit)
+       10    0.001    0.000    0.002    0.000 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:251(<dictcomp>)
+        8    0.000    0.000    0.002    0.000 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:135(<listcomp>)
+     1238    0.000    0.000    0.001    0.000 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:133(is_isolated_component)
+       61    0.000    0.000    0.001    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:1595(makeRecord)
+       61    0.001    0.000    0.001    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:292(__init__)
+     1000    0.001    0.000    0.001    0.000 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:251(<setcomp>)
+       41    0.000    0.000    0.001    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:942(format)
+       41    0.000    0.000    0.001    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:674(format)
+     1238    0.000    0.000    0.001    0.000 {built-in method builtins.all}
+    15865    0.001    0.000    0.001    0.000 {built-in method builtins.len}
+     2476    0.001    0.000    0.001    0.000 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:134(<genexpr>)
+       41    0.000    0.000    0.001    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:606(formatTime)
+       41    0.001    0.000    0.001    0.000 {method 'write' of '_io.TextIOWrapper' objects}
+       61    0.000    0.000    0.001    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:1561(findCaller)
+      245    0.000    0.000    0.000    0.000 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:195(<listcomp>)
+       41    0.000    0.000    0.000    0.000 {built-in method time.localtime}
+      183    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:194(_is_internal_frame)
+       41    0.000    0.000    0.000    0.000 {built-in method time.strftime}
+       10    0.000    0.000    0.000    0.000 /Volumes/coding/projects/PRRP-Implementation/src/graph_prrp.py:252(<dictcomp>)
+       61    0.000    0.000    0.000    0.000 <frozen posixpath>:140(basename)
+        9    0.000    0.000    0.000    0.000 {method 'union' of 'set' objects}
+       61    0.000    0.000    0.000    0.000 <frozen posixpath>:117(splitext)
+       20    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/random.py:367(choice)
+       41    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:658(formatMessage)
+       41    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:1087(flush)
+       41    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:447(format)
+       61    0.000    0.000    0.000    0.000 <frozen genericpath>:121(_splitext)
+       41    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:440(_format)
+       82    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:922(acquire)
+       20    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/random.py:235(_randbelow_with_getrandbits)
+       61    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:164(<lambda>)
+      183    0.000    0.000    0.000    0.000 <frozen posixpath>:52(normcase)
+       41    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:652(usesTime)
+      183    0.000    0.000    0.000    0.000 {method 'rfind' of 'str' objects}
+     1000    0.000    0.000    0.000    0.000 {method 'discard' of 'set' objects}
+      990    0.000    0.000    0.000    0.000 {method 'append' of 'collections.deque' objects}
+       61    0.000    0.000    0.000    0.000 <frozen posixpath>:41(_get_sep)
+       61    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:1734(isEnabledFor)
+       41    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:432(usesTime)
+       61    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:123(getLevelName)
+       83    0.000    0.000    0.000    0.000 {method 'acquire' of '_thread.RLock' objects}
+       82    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:929(release)
+       61    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/threading.py:1453(current_thread)
+      102    0.000    0.000    0.000    0.000 {built-in method builtins.hasattr}
+      102    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:815(filter)
+      305    0.000    0.000    0.000    0.000 {built-in method posix.fspath}
+       61    0.000    0.000    0.000    0.000 {built-in method time.time}
+       41    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:368(getMessage)
+       27    0.000    0.000    0.000    0.000 {method 'getrandbits' of '_random.Random' objects}
+       61    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/multiprocessing/process.py:37(current_process)
+       61    0.000    0.000    0.000    0.000 {built-in method sys._getframe}
+      122    0.000    0.000    0.000    0.000 {built-in method _thread.get_ident}
+       61    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/threading.py:1152(name)
+       41    0.000    0.000    0.000    0.000 {method 'find' of 'str' objects}
+      245    0.000    0.000    0.000    0.000 {method 'popleft' of 'collections.deque' objects}
+       61    0.000    0.000    0.000    0.000 {built-in method posix.getpid}
+       61    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/multiprocessing/process.py:189(name)
+       41    0.000    0.000    0.000    0.000 {method 'flush' of '_io.TextIOWrapper' objects}
+       83    0.000    0.000    0.000    0.000 {method 'release' of '_thread.RLock' objects}
+       41    0.000    0.000    0.000    0.000 {method 'keys' of 'dict' objects}
+       20    0.000    0.000    0.000    0.000 {method 'bit_length' of 'int' objects}
+        9    0.000    0.000    0.000    0.000 {method 'values' of 'dict' objects}
+        1    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:228(_acquireLock)
+        1    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:237(_releaseLock)
+        1    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:1720(getEffectiveLevel)
+        1    0.000    0.000    0.000    0.000 /Applications/anaconda3/envs/prrp/lib/python3.11/logging/__init__.py:1319(disable)
+        1    0.000    0.000    0.000    0.000 {method 'disable' of '_lsprof.Profiler' objects}
+
+
+
+
+===== Memory Usage Profiling =====
+
+Function: run_graph_prrp
+  Peak Memory Usage: 481.16 MiB
+  Memory Usage Samples: [356.078125, 356.203125, 370.0625, 404.5625, 418.359375, 430.796875, 446.171875, 446.171875, 453.796875, 454.078125, 454.078125, 454.75, 459.96875, 414.96875, 424.9375, 452.65625, 452.65625, 460.5625, 460.5625, 461.140625, 461.359375, 424.359375, 415.359375, 452.765625, 452.765625, 466.125, 468.234375, 468.234375, 468.75, 468.9375, 422.953125, 442.1875, 460.40625, 460.90625, 470.875, 470.875, 471.328125, 476.546875, 431.546875, 430.546875, 470.09375, 470.09375, 474.9375, 480.53125, 480.53125, 480.9375, 481.125, 436.15625, 435.15625, 473.34375, 473.34375, 478.71875, 480.96875, 481.15625, 436.15625, 436.25, 457.953125, 471.3125, 471.5625, 478.515625, 478.515625, 480.96875, 481.15625, 436.15625, 445.171875, 469.734375, 472.21875, 477.828125, 477.828125, 480.96875, 481.15625, 436.15625, 435.15625, 464.9375, 464.9375, 476.4375, 476.4375, 479.78125, 480.96875, 481.15625, 435.15625, 460.140625, 460.140625, 475.078125, 475.078125, 480.03125, 480.96875, 481.15625, 435.15625, 435.15625, 435.15625, 435.15625, 435.15625, 435.15625, 435.15625, 435.59375, 435.625, 438.359375, 386.8125]
+
+Function: construct_adjacency_list
+  Peak Memory Usage: 483.45 MiB
+  Memory Usage Samples: [427.078125, 427.078125, 430.375, 438.4375, 444.84375, 451.390625, 451.390625, 451.390625, 451.390625, 451.390625, 451.390625, 451.390625, 451.390625, 451.390625, 451.390625, 451.390625, 451.390625, 454.4375, 463.515625, 471.46875, 479.21875, 483.453125]
+
+===== Optimization Recommendations =====
+1. Investigate functions with high cumulative time (shown in the execution profile).
+2. Consider optimizing inner loops and data structures (e.g., using sets or efficient libraries) where memory usage is high.
+3. If memory usage is a concern, review the creation of large intermediate objects and consider in-place modifications.

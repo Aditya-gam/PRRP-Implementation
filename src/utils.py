@@ -255,51 +255,58 @@ def find_connected_components(adj_list: Dict[Any, List[Any]]) -> List[Set[Any]]:
 
 def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
     """
-    Determines whether a node is an articulation point using an iterative DFS approach.
+    Determines whether a node is an articulation point using Tarjan's Algorithm.
+
+    A node is an articulation point if its removal increases the number of connected components.
 
     Parameters:
         adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
-        node (Any): The node to test.
+        node (Any): The node to check.
 
     Returns:
-        bool: True if the node is an articulation point, False otherwise.
+        bool: True if the node is an articulation point; False otherwise.
     """
     if node not in adj_list:
         logger.error(f"Node {node} not found in the adjacency list.")
         raise KeyError(f"Node {node} not found in the adjacency list.")
 
-    disc = {}
-    low = {}
-    parent = {node: None}
-    ap = set()
-    time = [0]
-    stack = [(node, iter(adj_list[node]), False)]
+    # ✅ **Fix: Leaf nodes are never articulation points**
+    if len(adj_list[node]) <= 1:
+        logger.info(
+            f"Node {node} is a leaf node and cannot be an articulation point.")
+        return False
 
-    while stack:
-        current, neighbors_iter, backtrack = stack[-1]
-        if not backtrack:
-            disc[current] = low[current] = time[0]
-            time[0] += 1
-            for neighbor in neighbors_iter:
-                if neighbor not in disc:
-                    parent[neighbor] = current
-                    stack.append((neighbor, iter(adj_list[neighbor]), False))
-                    break
-            else:
-                stack[-1] = (current, neighbors_iter, True)
-        else:
-            stack.pop()
-            if stack:
-                parent_node = parent[current]
-                low[parent_node] = min(low[parent_node], low[current])
-                if parent_node is None and len([n for n in adj_list[current] if n not in disc]) > 1:
-                    ap.add(parent_node)
-                if parent_node is not None and low[current] >= disc[parent_node]:
-                    ap.add(parent_node)
+    def tarjan_ap_util(v: Any, parent: Any, disc: Dict[Any, int],
+                       low: Dict[Any, int], time: List[int], ap: Set[Any]) -> None:
+        children = 0
+        disc[v] = low[v] = time[0]
+        time[0] += 1
+
+        for w in adj_list[v]:
+            if w not in disc:
+                children += 1
+                tarjan_ap_util(w, v, disc, low, time, ap)
+                low[v] = min(low[v], low[w])
+                if parent is None and children > 1:
+                    ap.add(v)
+                if parent is not None and low[w] >= disc[v]:
+                    ap.add(v)
+            elif w != parent:
+                low[v] = min(low[v], disc[w])
+
+    disc: Dict[Any, int] = {}
+    low: Dict[Any, int] = {}
+    time: List[int] = [0]
+    ap: Set[Any] = set()
+
+    for v in adj_list.keys():
+        if v not in disc:
+            tarjan_ap_util(v, None, disc, low, time, ap)
 
     is_ap = node in ap
     logger.info(
         f"Node {node} is {'an' if is_ap else 'not an'} articulation point.")
+
     return is_ap
 
 
