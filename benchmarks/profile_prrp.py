@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.abspath(
 # Set up file paths (adjust if necessary)
 GRAPH_FILE_PATH = os.path.join(
     "data", "sample", "synthetic_large_graph_100k.graph")
-PROFILE_OUTPUT_FILE = "profile_results.txt"
+PROFILE_OUTPUT_FILE = "results/profile_results.txt"
 
 # Define default PRRP parameters
 # (These parameters might need to be tuned according to the dataset characteristics)

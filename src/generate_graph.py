@@ -106,8 +106,8 @@ if __name__ == "__main__":
 
     # Generate and save a large synthetic graph
     graph = generate_large_synthetic_graph(
-        num_nodes=100000, avg_degree=5, graph_type="mixed")
-    save_graph_to_metis(graph, "data/sample/synthetic_large_graph_100k.graph")
+        num_nodes=1000000, avg_degree=5, graph_type="mixed")
+    save_graph_to_metis(graph, "data/sample/synthetic_large_graph_1000k.graph")
 
     print(
         f"Graph generation completed in {time.time() - start_time:.2f} seconds.")
