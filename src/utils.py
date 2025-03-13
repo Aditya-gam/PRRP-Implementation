@@ -42,6 +42,26 @@ if not logger.handlers:
     logger.addHandler(handler)
 
 
+class DisjointSetUnion:
+    """
+    A simple Disjoint Set Union (Union-Find) implementation with path compression.
+    """
+
+    def __init__(self):
+        self.parent = {}
+
+    def find(self, x):
+        if self.parent[x] != x:
+            self.parent[x] = self.find(self.parent[x])
+        return self.parent[x]
+
+    def union(self, x, y):
+        rootX = self.find(x)
+        rootY = self.find(y)
+        if rootX != rootY:
+            self.parent[rootY] = rootX
+
+
 def _has_rook_adjacency(geom1: BaseGeometry, geom2: BaseGeometry) -> bool:
     """
     Checks if two geometries share a rook-adjacent boundary (i.e., a common edge).
@@ -92,11 +112,14 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
         ValueError: If required geometry information is missing.
     """
     if isinstance(areas, dict):
-        new_adj_list = {key: value if isinstance(value, set) else set(
-            value) for key, value in areas.items()}
+        # Update neighbor lists in-place to sets (without duplicating the entire dict)
+        for key, value in areas.items():
+            if not isinstance(value, set):
+                areas[key] = set(value)
         logger.info(
-            "Input is a dictionary; returning pre-constructed adjacency list.")
-        return new_adj_list
+            "Input is a dictionary; converted neighbor lists to sets in-place.")
+
+        return areas
 
     adj_list: Dict[Any, Set[Any]] = {}
 
@@ -355,19 +378,16 @@ def remove_articulation_area(adj_list: Dict[Any, List[Any]], node: Any) -> Dict[
 
 def random_seed_selection(adj_list: Dict[Any, List[Any]], assigned_regions: Set[Any], method: str = "gapless") -> Any:
     """
-    Selects a seed node from unassigned nodes using the "gapless" method.
-    If no candidate with neighbors in assigned regions exists, returns a random unassigned node.
+    Selects a seed node efficiently from unassigned nodes.
+    Optimized to compute the count of assigned neighbors for each node.
 
     Parameters:
-        adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
-        assigned_regions (Set[Any]): Nodes already assigned to regions.
-        method (str): Seed selection method (default "gapless").
+        adj_list: Graph's adjacency list.
+        assigned_regions: Set of nodes already assigned.
+        method: Selection method ("gapless" preferred).
 
     Returns:
-        Any: The selected seed node.
-
-    Raises:
-        ValueError: If no unassigned nodes are available or the method is unknown.
+        A selected seed node.
     """
     unassigned = set(adj_list.keys()) - assigned_regions
     if not unassigned:
@@ -375,11 +395,20 @@ def random_seed_selection(adj_list: Dict[Any, List[Any]], assigned_regions: Set[
         raise ValueError("No unassigned nodes available.")
 
     if method == "gapless":
-        candidate_seeds = {node for node in unassigned if any(
-            neighbor in assigned_regions for neighbor in adj_list[node])}
+        # Precompute candidate scores for each node based on count of assigned neighbors.
+        candidate_scores = {node: sum(
+            1 for nbr in adj_list[node] if nbr in assigned_regions) for node in unassigned}
+        # Filter nodes that have at least one assigned neighbor.
+        candidate_seeds = [node for node,
+                           score in candidate_scores.items() if score > 0]
         if candidate_seeds:
-            chosen = random.choice(list(candidate_seeds))
-            logger.info(f"Selected gapless seed: {chosen}")
+            # Choose the node with the highest score, breaking ties randomly.
+            max_score = max(candidate_scores[node] for node in candidate_seeds)
+            best_candidates = [
+                node for node in candidate_seeds if candidate_scores[node] == max_score]
+            chosen = random.choice(best_candidates)
+            logger.info(
+                f"Selected gapless seed: {chosen} with score {max_score}")
             return chosen
         chosen = random.choice(list(unassigned))
         logger.info(
