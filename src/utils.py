@@ -126,6 +126,13 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
 
     # Case 3: Input is a list of dictionaries (custom spatial data)
     elif isinstance(areas, list):
+        # NEW: Check that each element in the list is a dictionary.
+        if not all(isinstance(area, dict) for area in areas):
+            logger.error(
+                "Unsupported list element type in areas. Expected each element to be a dict with geometry information.")
+            raise TypeError(
+                "Unsupported type for areas. Expected GeoDataFrame, list of dicts, or dict.")
+
         # If all areas lack geometry, construct a complete graph.
         if all(area.get('geometry') is None for area in areas):
             for area in areas:
@@ -163,7 +170,7 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
         logger.error(
             "Unsupported type for areas. Expected GeoDataFrame, list, or dict.")
         raise TypeError(
-            "Unsupported type for areas. Expected GeoDataFrame, list, or dict.")
+            "Unsupported type for areas. Expected GeoDataFrame, list of dicts, or dict.")
 
     return adj_list
 
