@@ -29,12 +29,12 @@ from typing import Dict, List, Set, Any, Tuple, Callable, Iterable
 import geopandas as gpd
 from shapely.geometry.base import BaseGeometry
 
-# Global flag to enable parallel processing. Set to True to allow parallel execution.
+# Global flag for parallel processing.
 PARALLEL_PROCESSING_ENABLED = False
 
-# Configure logging
+# Configure logging.
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)  # Adjust as needed.
+logger.setLevel(logging.DEBUG)
 handler = logging.StreamHandler()
 formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 handler.setFormatter(formatter)
@@ -44,14 +44,14 @@ if not logger.handlers:
 
 def _has_rook_adjacency(geom1: BaseGeometry, geom2: BaseGeometry) -> bool:
     """
-    Check if two geometries share a rook-adjacent boundary (i.e., share a common edge).
+    Checks if two geometries share a rook-adjacent boundary (i.e., a common edge).
 
     Parameters:
         geom1 (BaseGeometry): The first geometry.
         geom2 (BaseGeometry): The second geometry.
 
     Returns:
-        bool: True if the geometries are rook adjacent, else False.
+        bool: True if the geometries are adjacent via a shared edge; False otherwise.
     """
     if not geom1.touches(geom2):
         return False
@@ -60,7 +60,6 @@ def _has_rook_adjacency(geom1: BaseGeometry, geom2: BaseGeometry) -> bool:
     if intersection.is_empty:
         return False
 
-    # Check if the intersection is (or contains) a LineString (edge) rather than a point.
     if intersection.geom_type in ['LineString', 'MultiLineString']:
         return True
 
@@ -74,45 +73,39 @@ def _has_rook_adjacency(geom1: BaseGeometry, geom2: BaseGeometry) -> bool:
 
 def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
     """
-    Creates a graph adjacency list using rook adjacency (for spatial data) or by directly
-    converting a pre-constructed graph-based input.
+    Creates a graph adjacency list using rook adjacency for spatial data or by converting a
+    pre-constructed graph-based input.
 
-    This function supports three forms of input:
-      1. A pre-constructed adjacency list (dictionary): Converts each neighbor list to a set.
-      2. A GeoDataFrame (spatial PRRP): Uses spatial indexing and geometry intersections.
-      3. A list of dictionaries (custom spatial data): Constructs either a complete graph
-         (if all geometries are None) or computes adjacency based on geometries.
+    Supported input types:
+        1. Dictionary (pre-constructed adjacency list)
+        2. GeoDataFrame (spatial data using geometry intersections)
+        3. List of dictionaries (custom spatial data)
 
     Parameters:
         areas (GeoDataFrame, list, or dict): Spatial areas with geometry information or a pre-built adjacency list.
 
     Returns:
-        Dict[Any, Set[Any]]: A dictionary mapping each area identifier to a set of adjacent area identifiers.
+        Dict[Any, Set[Any]]: Mapping from area identifiers to sets of adjacent area identifiers.
 
     Raises:
-        TypeError: If the input is not a GeoDataFrame, list, or dictionary.
-        ValueError: If a required geometry is missing.
+        TypeError: If the input type is unsupported.
+        ValueError: If required geometry information is missing.
     """
-    # Case 1: Input is already a dictionary (graph-based PRRP)
     if isinstance(areas, dict):
-        new_adj_list = {}
-        for key, value in areas.items():
-            # Convert neighbor lists to sets for efficient lookups.
-            new_adj_list[key] = value if isinstance(value, set) else set(value)
+        new_adj_list = {key: value if isinstance(value, set) else set(
+            value) for key, value in areas.items()}
         logger.info(
             "Input is a dictionary; returning pre-constructed adjacency list.")
         return new_adj_list
 
     adj_list: Dict[Any, Set[Any]] = {}
 
-    # Case 2: Input is a GeoDataFrame (spatial PRRP)
     if isinstance(areas, gpd.GeoDataFrame):
         try:
             sindex = areas.sindex
         except Exception as e:
             logger.error(f"Spatial index creation failed: {e}")
             raise
-
         for idx, area in areas.iterrows():
             geom = area.geometry
             adj_list[idx] = set()
@@ -123,17 +116,12 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
                 other_geom = areas.loc[other_idx].geometry
                 if _has_rook_adjacency(geom, other_geom):
                     adj_list[idx].add(other_idx)
-
-    # Case 3: Input is a list of dictionaries (custom spatial data)
     elif isinstance(areas, list):
-        # NEW: Check that each element in the list is a dictionary.
         if not all(isinstance(area, dict) for area in areas):
             logger.error(
-                "Unsupported list element type in areas. Expected each element to be a dict with geometry information.")
+                "Unsupported list element type; expected dicts with geometry information.")
             raise TypeError(
                 "Unsupported type for areas. Expected GeoDataFrame, list of dicts, or dict.")
-
-        # If all areas lack geometry, construct a complete graph.
         if all(area.get('geometry') is None for area in areas):
             for area in areas:
                 area_id = area.get('id')
@@ -177,17 +165,14 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
 
 def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
     """
-    Computes articulation points in a graph using Tarjan’s Algorithm implemented via an
-    iterative DFS approach. This version processes every connected component separately.
+    Computes the articulation points of a graph using Tarjan’s Algorithm in O(V + E) time.
 
     Parameters:
-        G (Dict[int, List[int]]): Graph represented as an adjacency list where keys are node IDs
-                                  and values are lists of adjacent node IDs.
+        G (Dict[int, List[int]]): Graph represented as an adjacency list.
 
     Returns:
-        Set[int]: Set of nodes that are articulation points.
+        Set[int]: The set of articulation points.
     """
-    # Convert neighbor lists to sets (if they aren’t already) for O(1) lookups.
     adj = {u: set(neighbors) for u, neighbors in G.items()}
     if not adj:
         return set()
@@ -198,14 +183,11 @@ def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
     ap: Set[int] = set()
     time_counter = 0
     child_count: Dict[int, int] = {}
-
-    # Stack for iterative DFS: each element is a tuple (node, neighbor_iterator)
     stack_frame = []
 
-    # Process every node to cover each connected component.
     for u in adj:
         if u in disc:
-            continue  # Already visited in a previous DFS.
+            continue
         parent[u] = None
         disc[u] = time_counter
         low[u] = time_counter
@@ -232,11 +214,9 @@ def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
                 if stack_frame:
                     par, _ = stack_frame[-1]
                     low[par] = min(low[par], low[current])
-                    # Only mark par as an articulation point if par is not the root.
                     if parent[current] == par and parent[par] is not None and low[current] >= disc[par]:
                         ap.add(par)
                 else:
-                    # 'current' is the root of the connected component.
                     if child_count[current] > 1:
                         ap.add(current)
     return ap
@@ -250,7 +230,7 @@ def find_connected_components(adj_list: Dict[Any, List[Any]]) -> List[Set[Any]]:
         adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
 
     Returns:
-        List[Set[Any]]: A list of sets, where each set contains nodes in one connected component.
+        List[Set[Any]]: A list of connected components (each component is a set of nodes).
     """
     visited: Set[Any] = set()
     components: List[Set[Any]] = []
@@ -275,14 +255,14 @@ def find_connected_components(adj_list: Dict[Any, List[Any]]) -> List[Set[Any]]:
 
 def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
     """
-    Determines if a given node is an articulation point using an iterative DFS approach.
+    Determines whether a node is an articulation point using an iterative DFS approach.
 
     Parameters:
         adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
-        node (Any): The node to check.
+        node (Any): The node to test.
 
     Returns:
-        bool: True if the node is an articulation point; False otherwise.
+        bool: True if the node is an articulation point, False otherwise.
     """
     if node not in adj_list:
         logger.error(f"Node {node} not found in the adjacency list.")
@@ -293,38 +273,26 @@ def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
     parent = {node: None}
     ap = set()
     time = [0]
-
-    # (current_node, neighbors_iterator, backtrack_flag)
     stack = [(node, iter(adj_list[node]), False)]
 
     while stack:
         current, neighbors_iter, backtrack = stack[-1]
-
         if not backtrack:
-            # First-time visit: Assign discovery time
             disc[current] = low[current] = time[0]
             time[0] += 1
-            children = 0
-
-            # Process all neighbors
             for neighbor in neighbors_iter:
                 if neighbor not in disc:
                     parent[neighbor] = current
-                    children += 1
                     stack.append((neighbor, iter(adj_list[neighbor]), False))
-                    break  # Break to process child first
+                    break
             else:
-                # If all neighbors are processed, mark for backtracking
                 stack[-1] = (current, neighbors_iter, True)
         else:
-            # Backtracking step
             stack.pop()
             if stack:
                 parent_node = parent[current]
                 low[parent_node] = min(low[parent_node], low[current])
-
-                # Check articulation point conditions
-                if parent_node is None and children > 1:
+                if parent_node is None and len([n for n in adj_list[current] if n not in disc]) > 1:
                     ap.add(parent_node)
                 if parent_node is not None and low[current] >= disc[parent_node]:
                     ap.add(parent_node)
@@ -332,22 +300,20 @@ def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
     is_ap = node in ap
     logger.info(
         f"Node {node} is {'an' if is_ap else 'not an'} articulation point.")
-
     return is_ap
 
 
 def remove_articulation_area(adj_list: Dict[Any, List[Any]], node: Any) -> Dict[Any, List[Any]]:
     """
     Removes an articulation point from the graph and reassigns it to maintain connectivity.
-    If removal disconnects the graph, the node is reassigned to the largest connected component;
-    otherwise, it is reassigned to one of its original neighbors.
+    If removal disconnects the graph, reassigns the node to the largest connected component.
 
     Parameters:
         adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
         node (Any): The articulation point to remove.
 
     Returns:
-        Dict[Any, List[Any]]: The updated adjacency list after removal and reassignment.
+        Dict[Any, List[Any]]: The updated adjacency list.
     """
     if node not in adj_list:
         logger.error(f"Node {node} not found in the adjacency list.")
@@ -368,7 +334,6 @@ def remove_articulation_area(adj_list: Dict[Any, List[Any]], node: Any) -> Dict[
         for neighbor in original_neighbors:
             if neighbor in largest_component:
                 new_adj[node].append(neighbor)
-                # Ensure bidirectional connection
                 new_adj[neighbor].append(node)
         logger.warning(
             f"Articulation node {node} removed and reassigned to maintain connectivity.")
@@ -381,17 +346,15 @@ def remove_articulation_area(adj_list: Dict[Any, List[Any]], node: Any) -> Dict[
     return new_adj
 
 
-def random_seed_selection(adj_list: Dict[Any, List[Any]], assigned_regions: Set[Any],
-                          method: str = "gapless") -> Any:
+def random_seed_selection(adj_list: Dict[Any, List[Any]], assigned_regions: Set[Any], method: str = "gapless") -> Any:
     """
-    Selects a seed node from the unassigned nodes using the "gapless" method.
-    A candidate seed is one that has at least one neighbor already assigned; if none exists,
-    a random unassigned node is returned.
+    Selects a seed node from unassigned nodes using the "gapless" method.
+    If no candidate with neighbors in assigned regions exists, returns a random unassigned node.
 
     Parameters:
         adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
         assigned_regions (Set[Any]): Nodes already assigned to regions.
-        method (str, optional): Seed selection method (default "gapless").
+        method (str): Seed selection method (default "gapless").
 
     Returns:
         Any: The selected seed node.
@@ -405,8 +368,8 @@ def random_seed_selection(adj_list: Dict[Any, List[Any]], assigned_regions: Set[
         raise ValueError("No unassigned nodes available.")
 
     if method == "gapless":
-        candidate_seeds = {node for node in unassigned
-                           if any(neighbor in assigned_regions for neighbor in adj_list[node])}
+        candidate_seeds = {node for node in unassigned if any(
+            neighbor in assigned_regions for neighbor in adj_list[node])}
         if candidate_seeds:
             chosen = random.choice(list(candidate_seeds))
             logger.info(f"Selected gapless seed: {chosen}")
@@ -424,20 +387,14 @@ def load_graph_from_metis(file_path: str) -> Dict[int, List[int]]:
     """
     Reads a graph in METIS format and converts it into an adjacency list.
 
-    This function expects that the METIS file uses 1-based indexing.
-    The output will be a dictionary with keys 1..n and neighbor lists
-    that are also 1-indexed.
-
     Parameters:
         file_path (str): Path to the METIS format file.
 
     Returns:
-        Dict[int, List[int]]: The adjacency list representation of the graph,
-                              with 1-based node indices.
+        Dict[int, List[int]]: Adjacency list with 1-based node indices.
 
     Raises:
-        ValueError: If the file is empty, the header is invalid, or the file is malformed.
-        Exception: For other I/O or parsing errors.
+        ValueError: If the file is empty, header is invalid, or malformed.
     """
     adj_list: Dict[int, List[int]] = {}
     try:
@@ -448,10 +405,8 @@ def load_graph_from_metis(file_path: str) -> Dict[int, List[int]]:
             logger.error("METIS file is empty.")
             raise ValueError("Empty METIS file.")
 
-        # Remove blank lines and comment lines (starting with '%')
-        content_lines = [
-            line.strip() for line in lines if line.strip() and not line.strip().startswith('%')
-        ]
+        content_lines = [line.strip() for line in lines if line.strip()
+                         and not line.strip().startswith('%')]
         if not content_lines:
             logger.error(
                 "METIS file is empty or contains only comments/whitespace.")
@@ -465,29 +420,24 @@ def load_graph_from_metis(file_path: str) -> Dict[int, List[int]]:
         num_nodes = int(header_tokens[0])
         header_edge_count = int(header_tokens[1])
 
-        # Ensure there are enough lines for all nodes.
         if len(content_lines) - 1 < num_nodes:
             logger.error("Insufficient vertex lines in METIS file.")
             raise ValueError("Insufficient vertex lines in METIS file.")
 
-        # Process each node (using 1-based indexing)
         for i in range(num_nodes):
-            # Node id will be i+1.
             line = content_lines[i + 1]
             tokens = line.split()
             neighbors = []
             for token in tokens:
                 try:
-                    neighbor = int(token)  # DO NOT subtract 1.
+                    neighbor = int(token)
                 except Exception as e:
                     logger.error(
                         f"Vertex {i+1}: Invalid neighbor token '{token}'.")
                     raise ValueError(
                         f"Invalid neighbor token in vertex {i+1}.") from e
-                # Avoid self-loops (if neighbor equals the current node id)
                 if neighbor != i + 1:
                     neighbors.append(neighbor)
-            # Validate that neighbor indices are in the range 1..num_nodes.
             for neighbor in neighbors:
                 if neighbor < 1 or neighbor > num_nodes:
                     logger.error(
@@ -497,7 +447,6 @@ def load_graph_from_metis(file_path: str) -> Dict[int, List[int]]:
             adj_list[i + 1] = neighbors
 
         total_neighbor_entries = sum(len(nlist) for nlist in adj_list.values())
-        # The header may list the number of edges (which might be half the sum if undirected)
         if total_neighbor_entries == header_edge_count:
             final_num_edges = header_edge_count
         elif total_neighbor_entries == 2 * header_edge_count:
@@ -505,8 +454,7 @@ def load_graph_from_metis(file_path: str) -> Dict[int, List[int]]:
         else:
             final_num_edges = total_neighbor_entries // 2
             logger.warning(
-                f"Computed total neighbor entries ({total_neighbor_entries}) do not match header edge count ({header_edge_count}). Using computed edge count: {final_num_edges}."
-            )
+                f"Computed total neighbor entries ({total_neighbor_entries}) do not match header edge count ({header_edge_count}). Using computed edge count: {final_num_edges}.")
 
         logger.info(
             f"Loaded METIS graph from '{file_path}': {num_nodes} nodes, {final_num_edges} edges.")
@@ -522,8 +470,8 @@ def save_graph_to_metis(file_path: str, adj_list: Dict[int, List[int]]) -> None:
     Saves an adjacency list in METIS format.
 
     Parameters:
-        file_path (str): The file path to save the METIS graph.
-        adj_list (Dict[int, List[int]]): The adjacency list of the graph.
+        file_path (str): File path for the METIS graph.
+        adj_list (Dict[int, List[int]]): The adjacency list.
 
     Returns:
         None
@@ -546,14 +494,14 @@ def save_graph_to_metis(file_path: str, adj_list: Dict[int, List[int]]) -> None:
 
 def find_boundary_areas(region: Set[Any], adj_list: Dict[Any, List[Any]]) -> Set[Any]:
     """
-    Identifies boundary areas of a region. A boundary area is a node with at least one neighbor outside the region.
+    Identifies boundary areas of a region.
 
     Parameters:
-        region (Set[Any]): The set of nodes in the region.
-        adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
+        region (Set[Any]): Nodes in the region.
+        adj_list (Dict[Any, List[Any]]): Graph's adjacency list.
 
     Returns:
-        Set[Any]: The set of boundary nodes.
+        Set[Any]: Boundary nodes with at least one neighbor outside the region.
     """
     boundary: Set[Any] = set()
     for node in region:
@@ -567,16 +515,13 @@ def find_boundary_areas(region: Set[Any], adj_list: Dict[Any, List[Any]]) -> Set
 
 def calculate_low_link_values(adj_list: Dict[Any, List[Any]]) -> Tuple[Dict[Any, int], Dict[Any, int]]:
     """
-    Computes discovery and low-link values for all nodes in the graph using DFS.
-    These values are used for detecting articulation points via Tarjan's algorithm.
+    Computes discovery and low-link values for nodes in the graph using DFS.
 
     Parameters:
-        adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
+        adj_list (Dict[Any, List[Any]]): Graph's adjacency list.
 
     Returns:
-        Tuple[Dict[Any, int], Dict[Any, int]]:
-            - disc: Mapping of node to discovery time.
-            - low: Mapping of node to its low-link value.
+        Tuple[Dict[Any, int], Dict[Any, int]]: (disc, low) mappings.
     """
     disc: Dict[Any, int] = {}
     low: Dict[Any, int] = {}
@@ -602,68 +547,39 @@ def calculate_low_link_values(adj_list: Dict[Any, List[Any]]) -> Tuple[Dict[Any,
 
 def compute_degree_list(G: Dict[int, List[int]]) -> Dict[int, List[int]]:
     """
-    Computes the degree list for each node and identifies parent-child relationships.
+    Computes the degree list for each node and establishes parent-child relationships.
 
     Parameters:
-        G (Dict[int, List[int]]): Graph adjacency list representation.
+        G (Dict[int, List[int]]): Graph adjacency list.
 
     Returns:
-        Dict[int, List[int]]: Dictionary mapping each node to its list of nested (child) nodes.
-
-    Explanation:
-    - Computes the degree (number of neighbors) for each node.
-    - Identifies parent nodes as nodes with a degree higher than the median degree of their neighbors.
-    - A node is assigned as a child if it is adjacent to a parent and has a lower degree.
-    - Only symmetric edges (i.e., edges where u is in G[v] and v is in G[u]) are processed.
-    - Isolated nodes (degree = 0) or nodes without a clear degree difference remain unassigned.
-    - Optimized for large-scale graphs using O(V + E) dictionary lookups.
+        Dict[int, List[int]]: Mapping of each node to its child nodes.
     """
-    # Step 1: Compute the degree of each node
     degrees = {node: len(neighbors) for node, neighbors in G.items()}
-
-    # Step 2: Identify potential parent nodes.
-    # A node is considered a parent if its degree is greater than the median degree of its neighbors.
     is_parent = {}
     for node, neighbors in G.items():
-        if not neighbors:  # Isolated node: cannot be a parent
+        if not neighbors:
             is_parent[node] = False
             continue
-
-        # Gather the degrees of all neighboring nodes
         neighbor_degrees = [degrees[nb] for nb in neighbors if nb in degrees]
         sorted_degs = sorted(neighbor_degrees)
         n = len(sorted_degs)
-        # Compute the median of neighbor degrees
-        if n % 2 == 1:
-            median = sorted_degs[n // 2]
-        else:
-            median = (sorted_degs[n // 2 - 1] + sorted_degs[n // 2]) / 2
-
-        # Mark as parent if the node's degree is strictly greater than the median
+        median = sorted_degs[n // 2] if n % 2 == 1 else (
+            sorted_degs[n // 2 - 1] + sorted_degs[n // 2]) / 2
         is_parent[node] = degrees[node] > median
 
-    # Step 3: Initialize the degree list dictionary with an empty list for each node.
     degree_list = {node: [] for node in G}
-
-    # Step 4: Process each undirected (symmetric) edge only once.
     processed_edges = set()
     for u in G:
         for v in G[u]:
-            # Ensure both endpoints are valid nodes in the graph.
             if v not in G:
                 continue
-            # Enforce symmetry: process the edge only if u is in G[v]
             if u not in G[v]:
                 continue
-
-            # Create a unique representation for the undirected edge.
             edge = tuple(sorted((u, v)))
             if edge in processed_edges:
                 continue
             processed_edges.add(edge)
-
-            # Establish parent-child relationship:
-            # If one node is a parent and the other is not—and the parent's degree is higher—assign the non-parent as a child.
             if is_parent.get(u, False) and (not is_parent.get(v, False)) and (degrees[u] > degrees[v]):
                 degree_list[u].append(v)
             elif is_parent.get(v, False) and (not is_parent.get(u, False)) and (degrees[v] > degrees[u]):
@@ -677,14 +593,13 @@ def parallel_execute(function: Callable[[Any], Any],
                      num_threads: int = 1,
                      use_multiprocessing: bool = False) -> List[Any]:
     """
-    Executes a function in parallel over the provided data if parallel processing is enabled
-    and num_threads > 1. Uses multiprocessing if specified; otherwise, uses threading.
+    Executes a function in parallel over the given data if enabled.
 
     Parameters:
         function (Callable[[Any], Any]): The function to apply.
-        data (Iterable[Any]): The data items to process.
-        num_threads (int, optional): Number of threads/processes to use (default 1).
-        use_multiprocessing (bool, optional): Whether to use multiprocessing (default False).
+        data (Iterable[Any]): Data items to process.
+        num_threads (int): Number of threads/processes to use.
+        use_multiprocessing (bool): Whether to use multiprocessing.
 
     Returns:
         List[Any]: List of results.

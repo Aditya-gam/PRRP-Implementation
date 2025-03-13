@@ -19,7 +19,7 @@ from typing import Dict, Set, List
 # Import required functions from utils.
 from src.utils import (
     construct_adjacency_list,
-    find_articulation_points,    # if needed for extra logging/debugging.
+    find_articulation_points,
     random_seed_selection,
     find_connected_components,
     find_boundary_areas,
@@ -54,7 +54,7 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
         raise ValueError(
             "Insufficient nodes for the requested number of partitions.")
 
-    # NEW VALIDATION: Check if the target partition size is excessively large.
+    # Validation: target partition size must not exceed total nodes.
     if C > len(all_nodes):
         logger.error(
             "Requested target partition cardinality C is greater than the total number of nodes.")
@@ -75,13 +75,13 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
         except ValueError:
             seed = random.choice(list(unassigned))
 
-        # Grow the partition from the selected seed.
+        # Grow the partition using an optimized method that precomputes articulation points.
         grown_partition = grow_partition(
             G_adj, unassigned, partition_id, C, MR)
         logger.info(
             f"Grew partition {partition_id} with {len(grown_partition)} nodes.")
 
-        # Merge disconnected components (now preserving isolated nodes).
+        # Merge disconnected areas to ensure connectivity.
         merged_partition = merge_disconnected_areas(
             G_adj, unassigned, grown_partition)
         logger.info(
@@ -93,7 +93,7 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
                 f"Returning {len(dropped_nodes)} dropped nodes to unassigned.")
             unassigned |= dropped_nodes
 
-        # Split partition if too large.
+        # If the partition is oversized, split it.
         if len(merged_partition) > MS:
             logger.info(
                 f"Partition {partition_id} exceeds maximum size {MS}. Splitting...")
@@ -109,7 +109,7 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
 
         unassigned -= merged_partition
 
-    # Final assignment for any remaining nodes.
+    # Final assignment: assign any remaining nodes.
     while unassigned:
         node = unassigned.pop()
         candidate_partitions = []
@@ -125,12 +125,11 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
                                key=lambda item: len(item[1]))[0]
             partitions[smallest_pid].add(node)
 
-    # Post-process each partition to ensure connectivity.
+    # Post-process partitions to ensure overall connectivity.
     for pid, part in partitions.items():
         induced = {n: list(G_adj[n] & part) for n in part}
         comps = find_connected_components(induced)
         if len(comps) > 1:
-            # Define isolated components: those where each node has no neighbor (within the partition).
             def is_isolated_component(comp):
                 return all(len(G_adj[n] & part) == 0 for n in comp)
             non_isolated = [
@@ -153,6 +152,7 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
 def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int) -> Set:
     """
     Grows a partition by expanding from a seed until reaching the target cardinality.
+    Optimized by precomputing the set of articulation points to avoid repeated DFS calls.
 
     Parameters:
         G (Dict): Graph as an adjacency list.
@@ -163,15 +163,8 @@ def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int) -> Set:
 
     Returns:
         Set: Set of nodes forming the grown partition.
-
-    Process:
-        - If the number of unassigned nodes is less than the target, return all remaining nodes.
-        - Otherwise, select a seed and use an iterative BFS to add adjacent nodes.
-        - Prefer adding neighbors that are not articulation points.
-        - If no non-articulation candidate exists, add an articulation point.
-        - If the queue empties before reaching the target size, try adding a new seed (up to MR retries).
     """
-    # If the remaining unassigned nodes are fewer than the target, return them directly.
+    # If the remaining unassigned nodes are fewer than needed, return them.
     if len(U) < c:
         partition = set(U)
         U.clear()
@@ -179,6 +172,9 @@ def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int) -> Set:
 
     partition = set()
     attempts = 0
+
+    # Precompute articulation points to avoid repeatedly calling a recursive DFS.
+    aps = find_articulation_points(G)
 
     # Select the initial seed.
     try:
@@ -195,10 +191,9 @@ def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int) -> Set:
     while queue and len(partition) < c:
         current = queue.popleft()
         added_any = False
-        # First, gather candidates that are NOT articulation points.
+        # Use set comprehension and the precomputed articulation points.
         non_articulation_candidates = [
-            nbr for nbr in G[current] if nbr in U and not is_articulation_point(G, nbr)
-        ]
+            nbr for nbr in G[current] if nbr in U and nbr not in aps]
         if non_articulation_candidates:
             for neighbor in non_articulation_candidates:
                 if neighbor in U:
@@ -209,7 +204,7 @@ def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int) -> Set:
                     if len(partition) >= c:
                         break
         else:
-            # If no safe candidate exists, fall back to adding any unassigned neighbor.
+            # Fallback: add any unassigned neighbor.
             for neighbor in G[current]:
                 if neighbor in U:
                     partition.add(neighbor)
@@ -219,7 +214,7 @@ def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int) -> Set:
                     if len(partition) >= c:
                         break
 
-        # If nothing was added from the current node and the queue is empty, try to add a candidate from adjacent nodes.
+        # If no candidate was added and the queue is empty, try a new seed from adjacent nodes.
         if not added_any and not queue and len(partition) < c and U:
             adjacent_candidates = set()
             for node in partition:
@@ -244,22 +239,25 @@ def merge_disconnected_areas(G: Dict, U: Set, Pi: Set) -> Set:
     """
     Merges disconnected subcomponents within a partition by adding artificial
     connections so that all nodes are retained and the partition becomes connected.
+
+    Parameters:
+        G (Dict): Graph as an adjacency list.
+        U (Set): Unassigned nodes (unused in this function, maintained for interface consistency).
+        Pi (Set): The current partition (which may be disconnected).
+
+    Returns:
+        Set: A connected partition containing all nodes in Pi.
     """
-    # Build the induced subgraph for nodes in Pi.
     induced_adj = {node: {nbr for nbr in G[node] if nbr in Pi} for node in Pi}
     comp_input = {node: list(neighbors)
                   for node, neighbors in induced_adj.items()}
     components = find_connected_components(comp_input)
 
-    # If the induced subgraph is already connected, return as is.
     if len(components) == 1:
         return Pi
 
-    # Instead of discarding components, merge them.
-    # Pick the largest component as the main component.
     main_comp = max(components, key=len)
     main_node = next(iter(main_comp))
-    # For every other component, add an artificial edge between each of its nodes and main_node.
     for comp in components:
         if comp is main_comp:
             continue
@@ -269,14 +267,12 @@ def merge_disconnected_areas(G: Dict, U: Set, Pi: Set) -> Set:
             if node not in G[main_node]:
                 G[main_node].add(node)
 
-    # (Optional) Recompute induced_adj to verify connectivity.
     induced_adj = {node: {nbr for nbr in G[node] if nbr in Pi} for node in Pi}
     new_components = find_connected_components(
         {node: list(neighbors) for node, neighbors in induced_adj.items()})
     if len(new_components) == 1:
         return Pi
     else:
-        # If still disconnected (should not happen), return Pi as a fallback.
         return Pi
 
 
@@ -291,13 +287,6 @@ def split_partition(G: Dict, Pi: Set, ci: int) -> List[Set]:
 
     Returns:
         List[Set]: List of partitions obtained after splitting.
-
-    Process:
-        - If Pi is within the target, return it as a single-element list.
-        - Identify boundary nodes (nodes adjacent to nodes outside Pi) using find_boundary_areas.
-        - Remove a number of boundary nodes (preferably not articulation points) so that the
-          remaining partition is of size ci.
-        - Determine connected components of the removed nodes to form additional partitions.
     """
     if len(Pi) <= ci:
         return [Pi]
@@ -306,11 +295,9 @@ def split_partition(G: Dict, Pi: Set, ci: int) -> List[Set]:
     current_partition = set(Pi)
     excess = len(Pi) - ci
     attempts = 0
-    max_attempts = 10 * excess  # Arbitrary maximum attempts.
+    max_attempts = 10 * excess
 
     while len(removed_nodes) < excess and attempts < max_attempts:
-        # Note: find_boundary_areas expects a region and an adjacency list.
-        # Here, we build a mini-adjacency list for current_partition.
         mini_adj = {node: list(G[node] & current_partition)
                     for node in current_partition}
         boundary_nodes = find_boundary_areas(current_partition, mini_adj)
@@ -325,7 +312,6 @@ def split_partition(G: Dict, Pi: Set, ci: int) -> List[Set]:
         removed_nodes.add(node_to_remove)
         attempts += 1
 
-    # Get connected components from the removed nodes.
     removed_adj = {node: [nbr for nbr in G[node]
                           if nbr in removed_nodes] for node in removed_nodes}
     new_components = find_connected_components(removed_adj)
