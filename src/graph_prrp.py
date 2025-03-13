@@ -151,10 +151,12 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
     return partitions
 
 
-def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int, precomputed_ap: Set) -> Set:
+def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int, precomputed_ap: Set = None) -> Set:
     """
     Grows a partition by expanding from a seed until reaching the target cardinality.
     Uses the precomputed set of articulation points to avoid repeated recursive DFS calls.
+
+    If no precomputed set is provided, it is computed within the function.
 
     Parameters:
         G (Dict): Graph as an adjacency list.
@@ -162,11 +164,18 @@ def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int, precomputed_ap: Set
         p (int): Identifier of the current partition (used for logging).
         c (int): Target number of nodes for the partition.
         MR (int): Maximum number of retries if growth stalls.
-        precomputed_ap (Set): Precomputed set of articulation points in G.
+        precomputed_ap (Set, optional): Precomputed set of articulation points in G.
+            If None, the set is computed within the function.
 
     Returns:
         Set: The grown partition.
     """
+    # If no precomputed set is provided, compute it here.
+    if precomputed_ap is None:
+        from src.utils import find_articulation_points
+        precomputed_ap = find_articulation_points(
+            {node: list(neighbors) for node, neighbors in G.items()})
+
     if len(U) < c:
         partition = set(U)
         U.clear()
