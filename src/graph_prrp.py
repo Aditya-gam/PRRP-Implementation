@@ -33,7 +33,16 @@ logger.setLevel(logging.DEBUG)
 def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
     """
     Main PRRP function to partition a graph.
-    (Documentation unchanged)
+
+    Parameters:
+        G (Dict): Input graph as an adjacency list (node -> neighbors).
+        p (int): Desired number of partitions.
+        C (int): Target partition cardinality (ideal number of nodes per partition).
+        MR (int): Maximum number of retries for growing a partition.
+        MS (int): Maximum allowed partition size before splitting.
+
+    Returns:
+        Dict[int, Set]: Mapping of partition IDs to sets of nodes.
     """
     # Ensure proper graph format.
     G_adj = construct_adjacency_list(G)
@@ -44,6 +53,13 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
             "Number of nodes is less than the number of desired partitions.")
         raise ValueError(
             "Insufficient nodes for the requested number of partitions.")
+
+    # NEW VALIDATION: Check if the target partition size is excessively large.
+    if C > len(all_nodes):
+        logger.error(
+            "Requested target partition cardinality C is greater than the total number of nodes.")
+        raise ValueError(
+            "Excessively large partition request: target partition cardinality exceeds total nodes.")
 
     partitions = {}
     partition_id = 1
