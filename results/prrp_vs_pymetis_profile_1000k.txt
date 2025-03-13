@@ -1,0 +1,9 @@
+===== PRRP vs PyMETIS Benchmark Results =====
+
+PRRP Execution Time: 0.21 seconds
+PRRP Peak Memory Usage: 119.41 MiB
+PRRP Edge Cuts: 2656
+
+PyMETIS Execution Time: 0.04 seconds
+PyMETIS Peak Memory Usage: 121.20 MiB
+PyMETIS Edge Cuts: 3286

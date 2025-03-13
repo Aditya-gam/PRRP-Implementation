@@ -1,5 +1,6 @@
 # Virtual environment
 venv/
+prrp/
 
 # Byte-compiled Python files
 __pycache__/
@@ -15,7 +16,7 @@ __pycache__/
 *.swo
 
 # Ignore data files (Uncomment if you don't want to commit datasets)
-data/
+# data/
 # notebooks/
 
 # Ignore Jupyter Notebook checkpoints

@@ -1,9 +1,11 @@
+import os
 import random
 import logging
 from typing import Dict, Set, List, Any
 from multiprocessing import Pool, cpu_count
 
-from src.utils import (
+from .prrp_data_loader import load_shapefile
+from .utils import (
     construct_adjacency_list,
     find_connected_components,
     find_boundary_areas,
@@ -78,7 +80,7 @@ def get_gapless_seed(adj_list: Dict[int, Set[int]],
 def grow_region(adj_list: Dict[int, Set[int]],
                 available_areas: Set[int],
                 target_cardinality: int,
-                max_retries: int = 5) -> Set[int]:
+                max_retries: int = 10) -> (Set[int], int):
     """
     Grows a spatially contiguous region until the target cardinality is reached.
 
@@ -99,7 +101,8 @@ def grow_region(adj_list: Dict[int, Set[int]],
         max_retries (int): Maximum number of attempts to grow the region before failing.
 
     Returns:
-        Set[int]: A set of area IDs representing the successfully grown region.
+        Tuple[Set[int], int]: A tuple containing a set of area IDs representing the successfully grown region
+        and the number of retries taken to achieve the target cardinality.
 
     Raises:
         ValueError: If target_cardinality exceeds the number of available areas.
@@ -158,7 +161,7 @@ def grow_region(adj_list: Dict[int, Set[int]],
             available_areas.difference_update(region)
             logger.info(
                 f"Successfully grown region with target cardinality {target_cardinality}: {region}")
-            return region
+            return region, retries + 1
         else:
             retries += 1
             logger.warning(
@@ -337,7 +340,8 @@ def split_region(region: Set[int],
     If the region exceeds its target cardinality (due to the merging phase), this function
     computes the number of excess areas and removes them using a randomized boundary area
     removal strategy. After removals, if the region becomes fragmented into multiple connected
-    components, only the largest contiguous component is retained.
+    components, the largest contiguous component is retained. If the retained component is 
+    smaller than `target_cardinality`, previously removed areas are reassigned.
 
     Parameters:
         region (Set[int]): The set of area IDs currently in the region.
@@ -369,20 +373,55 @@ def split_region(region: Set[int],
     )
 
     # Remove excess boundary areas until the region size matches the target.
-    adjusted_region = remove_boundary_areas(region, excess_count, adj_list)
+    adjusted_region = region.copy()
+    removed_areas = set()
 
-    # Final connectivity check: rebuild a subgraph and verify that the region is contiguous.
-    sub_adj_final: Dict[int, List[int]] = {
-        area: list(adj_list.get(area, set()) & adjusted_region) for area in adjusted_region
-    }
-    final_components = find_connected_components(sub_adj_final)
-    if len(final_components) > 1:
-        largest_component = max(final_components, key=len)
+    while excess_count > 0:
+        boundary = find_boundary_areas(
+            adjusted_region, {k: list(v) for k, v in adj_list.items()})
+
+        if not boundary:
+            logger.warning(
+                "No more removable boundary areas without risking discontiguity.")
+            break  # Stop if further removals could fragment the region
+
+        area_to_remove = random.choice(list(boundary))
+        adjusted_region.remove(area_to_remove)
+        removed_areas.add(area_to_remove)
+        excess_count -= 1
+        logger.info(
+            f"Removed boundary area {area_to_remove} from region; {excess_count} removals remaining.")
+
+        # After removal, check spatial contiguity by building a subgraph.
+        sub_adj: Dict[int, List[int]] = {
+            area: list(adj_list.get(area, set()) & adjusted_region) for area in adjusted_region
+        }
+        components = find_connected_components(sub_adj)
+
+        if len(components) > 1:
+            # Keep only the largest connected component.
+            largest_component = max(components, key=len)
+            removed_areas.update(adjusted_region - largest_component)
+            adjusted_region = largest_component
+            logger.warning(
+                f"Region split into multiple components. Keeping largest component with {len(adjusted_region)} areas; removed {removed_areas}."
+            )
+
+    # If the final adjusted region is smaller than `target_cardinality`, reassign some removed areas
+    if len(adjusted_region) < target_cardinality:
+        needed_count = target_cardinality - len(adjusted_region)
         logger.warning(
-            f"After splitting, region is fragmented into {len(final_components)} components; "
-            f"keeping largest component with {len(largest_component)} areas."
-        )
-        adjusted_region = largest_component
+            f"Final region too small ({len(adjusted_region)}). Reassigning {needed_count} areas from removed areas.")
+
+        while needed_count > 0 and removed_areas:
+            # Add back a removed area that is adjacent to the current region
+            for area in removed_areas:
+                if any(neighbor in adjusted_region for neighbor in adj_list.get(area, [])):
+                    adjusted_region.add(area)
+                    removed_areas.remove(area)
+                    needed_count -= 1
+                    if needed_count == 0:
+                        break
 
     logger.info(
         f"Region splitting complete. Final region size is {len(adjusted_region)} areas.")
@@ -394,7 +433,7 @@ def split_region(region: Set[int],
 # ==============================
 
 
-def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int]) -> List[Set[int]]:
+def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int], solutions_count: int) -> List[List[Set[int]]]:
     """
     Executes the full PRRP algorithm, forming the specified number of regions
     while maintaining spatial contiguity and satisfying cardinality constraints.
@@ -403,9 +442,10 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int]) -> L
         areas (List[Dict]): List of spatial areas with 'id' and 'geometry' attributes.
         num_regions (int): Number of regions to create.
         cardinalities (List[int]): List of target sizes for each region.
+        solutions_count (int): Number of independent PRRP solutions to generate.
 
     Returns:
-        List[Set[int]]: A list of sets, each containing area IDs forming a valid region.
+        List[List[Set[int]]]: A list of valid PRRP solutions. Each solution is a list of sets (each set represents a region).
     """
     if num_regions != len(cardinalities):
         raise ValueError(
@@ -420,29 +460,33 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int]) -> L
     # Sort cardinalities in descending order.
     cardinalities.sort(reverse=True)
 
-    regions = []
-    for target_cardinality in cardinalities:
-        logger.info(f"Growing region with target size: {target_cardinality}")
+    valid_solutions = []
 
+    for _ in range(solutions_count):
+        regions = []
+        temp_available_areas = available_areas.copy()
         try:
-            # Grow the region.
-            region = grow_region(adj_list, available_areas, target_cardinality)
-            # Only perform merge/split if there remain unassigned areas.
-            if available_areas:
-                merged_region = merge_disconnected_areas(
-                    adj_list, available_areas, region)
-                final_region = split_region(
-                    merged_region, target_cardinality, adj_list)
-            else:
-                # If no areas remain unassigned, no merge or split is needed.
-                final_region = region
-            regions.append(final_region)
-            logger.info(f"Region finalized with {len(final_region)} areas.")
+            for target_cardinality in cardinalities:
+                logger.info(f"Growing region with target size: {target_cardinality}")
+
+                # Grow the region.
+                region, no_of_retries = grow_region(adj_list, temp_available_areas, target_cardinality)
+                # Only perform merge/split if there remain unassigned areas.
+                if temp_available_areas:
+                    merged_region = merge_disconnected_areas(
+                        adj_list, temp_available_areas, region)
+                    final_region = split_region(
+                        merged_region, target_cardinality, adj_list)
+                else:
+                    # If no areas remain unassigned, no merge or split is needed.
+                    final_region = region
+                regions.append(final_region)
+                logger.info(f"Region finalized with {len(final_region)} areas.")
+            valid_solutions.append(regions)
         except Exception as e:
             logger.error(f"Failed to generate region: {e}")
-            return []  # Return an empty result indicating failure
 
-    return regions
+    return valid_solutions
 
 
 # ==============================
@@ -453,7 +497,8 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int]) -> L
 def _prrp_worker(seed_value: int,
                  areas: List[Dict[str, Any]],
                  num_regions: int,
-                 cardinalities: List[int]) -> List[Set[int]]:
+                 cardinalities: List[int],
+                 solutions_count: int) -> List[Set[int]]:
     """
     Worker function for parallel PRRP execution. Sets a unique random seed
     for statistical independence, executes one full PRRP solution, and returns it.
@@ -469,7 +514,7 @@ def _prrp_worker(seed_value: int,
     """
     random.seed(seed_value)
     logger.info(f"Worker started with seed {seed_value}.")
-    solution = run_prrp(areas, num_regions, cardinalities)
+    solution = run_prrp(areas, num_regions, cardinalities, solutions_count)
     logger.info(f"Worker with seed {seed_value} completed a solution.")
 
     return solution
@@ -513,7 +558,7 @@ def run_parallel_prrp(areas: List[Dict[str, Any]],
             "Starting parallel execution of PRRP solutions using multiprocessing.")
         with Pool(processes=num_threads) as pool:
             # Each worker gets a unique seed, along with the areas, number of regions, and cardinalities.
-            worker_args = [(seed, areas, num_regions, cardinalities)
+            worker_args = [(seed, areas, num_regions, cardinalities, solutions_count)
                            for seed in seeds]
             solutions = pool.starmap(_prrp_worker, worker_args)
         logger.info("Parallel execution of PRRP solutions completed.")
@@ -522,7 +567,7 @@ def run_parallel_prrp(areas: List[Dict[str, Any]],
             "Parallelization disabled; executing PRRP solutions sequentially.")
         for seed in seeds:
             solutions.append(_prrp_worker(
-                seed, areas, num_regions, cardinalities))
+                seed, areas, num_regions, cardinalities, solutions_count))
         logger.info("Sequential execution of PRRP solutions completed.")
 
     return solutions
@@ -532,18 +577,36 @@ def run_parallel_prrp(areas: List[Dict[str, Any]],
 # 8. Main Execution Block
 # ==============================
 if __name__ == "__main__":
-    # Example Usage:
-    # Create dummy spatial data for testing. In practice, these would be your actual spatial areas.
-    sample_areas = [
-        {'id': i, 'geometry': None} for i in range(50)
-    ]
-    # Define the number of regions and their target cardinalities.
-    num_regions = 5
-    # For example, each region should have 10 areas.
-    cardinalities = [10, 10, 10, 10, 10]
+    # Load the shapefile data.
+    # get the absolute path to the shapefile.
+    shapefile_path = os.path.abspath(os.path.join(
+        os.getcwd(), 'data/cb_2015_42_tract_500k/cb_2015_42_tract_500k.shp'))
+    print(f"Path to shape file : {shapefile_path}")
+
+    sample_areas = load_shapefile(shapefile_path)
+
+    # Solution Set Size
+    solutions_count = 3
+
+    # Define the number of regions to create.
+    total_areas = len(sample_areas)
+    num_regions = random.randint(2, total_areas // 2)
+    
+    # Define random target cardinalities for each region such that their sum is equal to the total area points.
+    cardinalities = [2] * num_regions
+    remaining = total_areas - 2 * num_regions
+
+    for i in range(num_regions):
+        if remaining == 0:
+            break
+        add = random.randint(0, remaining)
+        cardinalities[i] += add
+        remaining -= add
+
+    random.shuffle(cardinalities)
 
     logger.info("Running a single PRRP solution...")
-    single_solution = run_prrp(sample_areas, num_regions, cardinalities)
+    single_solution = run_prrp(sample_areas, num_regions, cardinalities, solutions_count)
     logger.info(f"Single PRRP solution: {single_solution}")
 
     logger.info("Running parallel PRRP solutions...")
