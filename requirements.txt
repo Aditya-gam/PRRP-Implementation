@@ -24,3 +24,4 @@ shapely==2.0.7
 six==1.17.0
 tzdata==2025.1
 memory_profiler
+metis
