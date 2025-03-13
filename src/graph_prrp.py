@@ -13,6 +13,7 @@ or already as an adjacency list. This implementation leverages utilities from ut
 
 import logging
 import random
+import heapq
 from collections import deque
 from typing import Dict, Set, List
 
@@ -61,7 +62,6 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
         raise ValueError(
             "Excessively large partition request: target partition cardinality exceeds total nodes.")
 
-    # Precompute the articulation points once (using Tarjan's algorithm)
     precomputed_ap = find_articulation_points(
         {node: list(neighbors) for node, neighbors in G_adj.items()})
 
@@ -79,13 +79,11 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
         except ValueError:
             seed = random.choice(list(unassigned))
 
-        # Grow the partition using the optimized method (with cached articulation points)
         grown_partition = grow_partition(
             G_adj, unassigned, partition_id, C, MR, precomputed_ap)
         logger.info(
             f"Grew partition {partition_id} with {len(grown_partition)} nodes.")
 
-        # Merge disconnected areas (using union-find; see utils.py for details)
         merged_partition = merge_disconnected_areas(
             G_adj, unassigned, grown_partition)
         logger.info(
@@ -112,22 +110,26 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
 
         unassigned -= merged_partition
 
+    # Final assignment: Instead of using sum() and any() repeatedly, we compute the candidate score incrementally.
     while unassigned:
         node = unassigned.pop()
-        candidate_partitions = []
+        best_pid = None
+        best_score = -1
         for pid, part in partitions.items():
-            if any(neighbor in part for neighbor in G_adj[node]):
-                candidate_partitions.append((pid, part))
-        if candidate_partitions:
-            best_pid, best_part = max(candidate_partitions, key=lambda item: sum(
-                1 for neighbor in G_adj[node] if neighbor in item[1]))
-            best_part.add(node)
+            score = 0
+            for nbr in G_adj[node]:
+                if nbr in part:
+                    score += 1
+            if score > best_score:
+                best_score = score
+                best_pid = pid
+        if best_pid is not None:
+            partitions[best_pid].add(node)
         else:
             smallest_pid = min(partitions.items(),
                                key=lambda item: len(item[1]))[0]
             partitions[smallest_pid].add(node)
 
-    # Final post-processing (connect any isolated components)
     for pid, part in partitions.items():
         induced = {n: list(G_adj[n] & part) for n in part}
         comps = find_connected_components(induced)
@@ -154,23 +156,22 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
 def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int, precomputed_ap: Set = None) -> Set:
     """
     Grows a partition by expanding from a seed until reaching the target cardinality.
-    Uses the precomputed set of articulation points to avoid repeated recursive DFS calls.
+    Uses a heap-based priority queue for expansion based on the number of unassigned neighbors,
+    and uses the precomputed set of articulation points to filter candidates.
 
-    If no precomputed set is provided, it is computed within the function.
+    If precomputed_ap is not provided, it is computed within the function.
 
     Parameters:
         G (Dict): Graph as an adjacency list.
         U (Set): Set of unassigned nodes.
-        p (int): Identifier of the current partition (used for logging).
+        p (int): Identifier of the current partition.
         c (int): Target number of nodes for the partition.
         MR (int): Maximum number of retries if growth stalls.
         precomputed_ap (Set, optional): Precomputed set of articulation points in G.
-            If None, the set is computed within the function.
 
     Returns:
         Set: The grown partition.
     """
-    # If no precomputed set is provided, compute it here.
     if precomputed_ap is None:
         from src.utils import find_articulation_points
         precomputed_ap = find_articulation_points(
@@ -193,34 +194,27 @@ def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int, precomputed_ap: Set
 
     partition.add(seed)
     U.discard(seed)
-    queue = deque([seed])
+    # Use a heap-based priority queue. Each element is (priority, node)
+    # Priority is defined as -#unassigned_neighbors (so higher connectivity gets higher priority).
+    heap = []
 
-    while queue and len(partition) < c:
-        current = queue.popleft()
-        added_any = False
-        # Instead of repeatedly calling is_articulation_point(), use the precomputed set.
-        non_articulation_candidates = [
-            nbr for nbr in G[current] if nbr in U and nbr not in precomputed_ap]
-        if non_articulation_candidates:
-            for neighbor in non_articulation_candidates:
-                if neighbor in U:
-                    partition.add(neighbor)
-                    U.discard(neighbor)
-                    queue.append(neighbor)
-                    added_any = True
-                    if len(partition) >= c:
-                        break
-        else:
-            for neighbor in G[current]:
-                if neighbor in U:
-                    partition.add(neighbor)
-                    U.discard(neighbor)
-                    queue.append(neighbor)
-                    added_any = True
-                    if len(partition) >= c:
-                        break
+    def get_priority(node):
+        # Count unassigned neighbors
+        return -sum(1 for nbr in G[node] if nbr in U)
+    heapq.heappush(heap, (get_priority(seed), seed))
 
-        if not added_any and not queue and len(partition) < c and U:
+    while heap and len(partition) < c:
+        prio, current = heapq.heappop(heap)
+        # Expand from current: consider its neighbors that are unassigned and not in precomputed_ap.
+        for nbr in G[current]:
+            if nbr in U and nbr not in precomputed_ap:
+                partition.add(nbr)
+                U.discard(nbr)
+                heapq.heappush(heap, (get_priority(nbr), nbr))
+                if len(partition) >= c:
+                    break
+        if not heap and len(partition) < c and U:
+            # If the heap is empty, pick a new candidate from neighbors of current partition.
             adjacent_candidates = set()
             for node in partition:
                 adjacent_candidates |= (G[node] & U)
@@ -228,7 +222,7 @@ def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int, precomputed_ap: Set
                 list(adjacent_candidates)) if adjacent_candidates else random.choice(list(U))
             partition.add(new_seed)
             U.discard(new_seed)
-            queue.append(new_seed)
+            heapq.heappush(heap, (get_priority(new_seed), new_seed))
             attempts += 1
             if attempts >= MR:
                 logger.warning(
