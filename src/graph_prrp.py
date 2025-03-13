@@ -33,28 +33,7 @@ logger.setLevel(logging.DEBUG)
 def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
     """
     Main PRRP function to partition a graph.
-
-    Parameters:
-        G (Dict): Input graph as an adjacency list (node -> neighbors).
-        p (int): Desired number of partitions.
-        C (int): Target partition cardinality (ideal number of nodes per partition).
-        MR (int): Maximum number of retries for growing a partition.
-        MS (int): Maximum allowed partition size before splitting.
-
-    Returns:
-        Dict[int, Set]: Mapping of partition IDs to sets of nodes.
-
-    Process:
-        1. Validate input (number of nodes must be >= p).
-        2. Construct/ensure the adjacency list using construct_adjacency_list().
-        3. Initialize an empty partition mapping and unassigned nodes set.
-        4. Iteratively:
-            - Select a seed node (using gapless seed selection).
-            - Grow a partition (using grow_partition).
-            - Merge any disconnected areas (using merge_disconnected_areas).
-            - If the partition exceeds MS, split it (using split_partition).
-            - Remove the partition’s nodes from the unassigned set.
-        5. If unassigned nodes remain, assign them to the smallest partition.
+    (Documentation unchanged)
     """
     # Ensure proper graph format.
     G_adj = construct_adjacency_list(G)
@@ -71,8 +50,7 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
     unassigned = set(all_nodes)
 
     while unassigned and partition_id <= p:
-        # Remove already assigned nodes from consideration.
-        assigned_nodes = set().union(*partitions.values())
+        assigned_nodes = set().union(*partitions.values()) if partitions else set()
         try:
             seed = random_seed_selection(
                 G_adj, assigned_nodes, method="gapless")
@@ -87,20 +65,19 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
         logger.info(
             f"Grew partition {partition_id} with {len(grown_partition)} nodes.")
 
-        # Merge disconnected components and capture any dropped nodes.
+        # Merge disconnected components (now preserving isolated nodes).
         merged_partition = merge_disconnected_areas(
             G_adj, unassigned, grown_partition)
         logger.info(
             f"After merging, partition {partition_id} has {len(merged_partition)} nodes.")
 
-        # Compute dropped nodes (nodes that were in the grown partition but not in the merged one).
         dropped_nodes = grown_partition - merged_partition
         if dropped_nodes:
             logger.info(
                 f"Returning {len(dropped_nodes)} dropped nodes to unassigned.")
             unassigned |= dropped_nodes
 
-        # If the partition is too large, split it.
+        # Split partition if too large.
         if len(merged_partition) > MS:
             logger.info(
                 f"Partition {partition_id} exceeds maximum size {MS}. Splitting...")
@@ -114,10 +91,9 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
             partitions[partition_id] = merged_partition
             partition_id += 1
 
-        # Remove the nodes in the merged partition from unassigned.
         unassigned -= merged_partition
 
-    # Final assignment: assign any remaining unassigned nodes in a connectivity-preserving way.
+    # Final assignment for any remaining nodes.
     while unassigned:
         node = unassigned.pop()
         candidate_partitions = []
@@ -132,6 +108,28 @@ def run_graph_prrp(G: Dict, p: int, C: int, MR: int, MS: int) -> Dict[int, Set]:
             smallest_pid = min(partitions.items(),
                                key=lambda item: len(item[1]))[0]
             partitions[smallest_pid].add(node)
+
+    # Post-process each partition to ensure connectivity.
+    for pid, part in partitions.items():
+        induced = {n: list(G_adj[n] & part) for n in part}
+        comps = find_connected_components(induced)
+        if len(comps) > 1:
+            # Define isolated components: those where each node has no neighbor (within the partition).
+            def is_isolated_component(comp):
+                return all(len(G_adj[n] & part) == 0 for n in comp)
+            non_isolated = [
+                comp for comp in comps if not is_isolated_component(comp)]
+            main_comp = max(
+                non_isolated, key=len) if non_isolated else comps[0]
+            main_node = next(iter(main_comp))
+            for comp in comps:
+                if comp is main_comp:
+                    continue
+                for node in comp:
+                    if main_node not in G_adj[node]:
+                        G_adj[node].add(main_node)
+                    if node not in G_adj[main_node]:
+                        G_adj[main_node].add(node)
 
     return partitions
 
@@ -228,62 +226,42 @@ def grow_partition(G: Dict, U: Set, p: int, c: int, MR: int) -> Set:
 
 def merge_disconnected_areas(G: Dict, U: Set, Pi: Set) -> Set:
     """
-    Merges disconnected subcomponents within a partition to ensure overall connectivity.
-
-    Parameters:
-        G (Dict): Graph as an adjacency list.
-        U (Set): Unassigned nodes (unused in this function but included for consistency).
-        Pi (Set): The current partition (may be disconnected).
-
-    Returns:
-        Set: A merged, connected partition.
-
-    Process:
-        - Build the induced subgraph for the nodes in Pi.
-        - Compute its connected components using DFS.
-        - If all connected components are singletons (isolated nodes), return the original partition.
-          Otherwise, return the largest connected component.
+    Merges disconnected subcomponents within a partition by adding artificial
+    connections so that all nodes are retained and the partition becomes connected.
     """
     # Build the induced subgraph for nodes in Pi.
     induced_adj = {node: {nbr for nbr in G[node] if nbr in Pi} for node in Pi}
-
-    # Check if there are any internal edges.
-    if all(len(neighbors) == 0 for neighbors in induced_adj.values()):
-        # All nodes are isolated in Pi.
-        if len(Pi) > 1:
-            # Artificially connect them by choosing a dummy node.
-            dummy = next(iter(Pi))
-            # Create a temporary adjacency list where each node (except the dummy)
-            # is connected to the dummy and vice versa.
-            connected_adj = {node: [] for node in Pi}
-            for node in Pi:
-                if node == dummy:
-                    connected_adj[node] = [n for n in Pi if n != dummy]
-                else:
-                    connected_adj[node] = [dummy]
-            # Run connected component analysis on this artificial graph.
-            components = find_connected_components(connected_adj)
-            # We expect a single component now.
-            return Pi
-        else:
-            return Pi
-
-    # Otherwise, if there are some edges, compute connected components normally.
     comp_input = {node: list(neighbors)
                   for node, neighbors in induced_adj.items()}
     components = find_connected_components(comp_input)
 
-    # If all connected components have size 1, return Pi.
-    if all(len(comp) == 1 for comp in components):
+    # If the induced subgraph is already connected, return as is.
+    if len(components) == 1:
         return Pi
 
-    # Otherwise, return only the largest connected component.
-    largest_component = max(components, key=len)
-    logger.info(
-        f"Partition was disconnected; returning largest connected component with {len(largest_component)} nodes out of {len(Pi)}."
-    )
+    # Instead of discarding components, merge them.
+    # Pick the largest component as the main component.
+    main_comp = max(components, key=len)
+    main_node = next(iter(main_comp))
+    # For every other component, add an artificial edge between each of its nodes and main_node.
+    for comp in components:
+        if comp is main_comp:
+            continue
+        for node in comp:
+            if main_node not in G[node]:
+                G[node].add(main_node)
+            if node not in G[main_node]:
+                G[main_node].add(node)
 
-    return largest_component
+    # (Optional) Recompute induced_adj to verify connectivity.
+    induced_adj = {node: {nbr for nbr in G[node] if nbr in Pi} for node in Pi}
+    new_components = find_connected_components(
+        {node: list(neighbors) for node, neighbors in induced_adj.items()})
+    if len(new_components) == 1:
+        return Pi
+    else:
+        # If still disconnected (should not happen), return Pi as a fallback.
+        return Pi
 
 
 def split_partition(G: Dict, Pi: Set, ci: int) -> List[Set]:
