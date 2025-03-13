@@ -275,7 +275,7 @@ def find_connected_components(adj_list: Dict[Any, List[Any]]) -> List[Set[Any]]:
 
 def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
     """
-    Determines if a given node is an articulation point using Tarjan's Algorithm.
+    Determines if a given node is an articulation point using an iterative DFS approach.
 
     Parameters:
         adj_list (Dict[Any, List[Any]]): The graph's adjacency list.
@@ -288,32 +288,46 @@ def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
         logger.error(f"Node {node} not found in the adjacency list.")
         raise KeyError(f"Node {node} not found in the adjacency list.")
 
-    def tarjan_ap_util(v: Any, parent: Any, disc: Dict[Any, int],
-                       low: Dict[Any, int], time: List[int], ap: Set[Any]) -> None:
-        children = 0
-        disc[v] = low[v] = time[0]
-        time[0] += 1
+    disc = {}
+    low = {}
+    parent = {node: None}
+    ap = set()
+    time = [0]
 
-        for w in adj_list[v]:
-            if w not in disc:
-                children += 1
-                tarjan_ap_util(w, v, disc, low, time, ap)
-                low[v] = min(low[v], low[w])
-                if parent is None and children > 1:
-                    ap.add(v)
-                if parent is not None and low[w] >= disc[v]:
-                    ap.add(v)
-            elif w != parent:
-                low[v] = min(low[v], disc[w])
+    # (current_node, neighbors_iterator, backtrack_flag)
+    stack = [(node, iter(adj_list[node]), False)]
 
-    disc: Dict[Any, int] = {}
-    low: Dict[Any, int] = {}
-    time: List[int] = [0]
-    ap: Set[Any] = set()
+    while stack:
+        current, neighbors_iter, backtrack = stack[-1]
 
-    for v in adj_list.keys():
-        if v not in disc:
-            tarjan_ap_util(v, None, disc, low, time, ap)
+        if not backtrack:
+            # First-time visit: Assign discovery time
+            disc[current] = low[current] = time[0]
+            time[0] += 1
+            children = 0
+
+            # Process all neighbors
+            for neighbor in neighbors_iter:
+                if neighbor not in disc:
+                    parent[neighbor] = current
+                    children += 1
+                    stack.append((neighbor, iter(adj_list[neighbor]), False))
+                    break  # Break to process child first
+            else:
+                # If all neighbors are processed, mark for backtracking
+                stack[-1] = (current, neighbors_iter, True)
+        else:
+            # Backtracking step
+            stack.pop()
+            if stack:
+                parent_node = parent[current]
+                low[parent_node] = min(low[parent_node], low[current])
+
+                # Check articulation point conditions
+                if parent_node is None and children > 1:
+                    ap.add(parent_node)
+                if parent_node is not None and low[current] >= disc[parent_node]:
+                    ap.add(parent_node)
 
     is_ap = node in ap
     logger.info(

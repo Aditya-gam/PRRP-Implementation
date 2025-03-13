@@ -24,18 +24,17 @@ def generate_large_synthetic_graph(
     Returns:
         networkx.Graph: A fully connected, 1-based indexed undirected graph.
     """
-    random.seed(seed)
-    nx.random.seed(seed)
+    random.seed(seed)  # Ensuring reproducibility
 
     print(f"Generating a {graph_type} graph with {num_nodes} nodes...")
 
     # Initialize graph
     if graph_type == "scale_free":
-        G = nx.barabasi_albert_graph(num_nodes, avg_degree)
+        G = nx.barabasi_albert_graph(num_nodes, avg_degree, seed=seed)
     elif graph_type == "small_world":
-        G = nx.watts_strogatz_graph(num_nodes, avg_degree, 0.1)
+        G = nx.watts_strogatz_graph(num_nodes, avg_degree, 0.1, seed=seed)
     elif graph_type == "random":
-        G = nx.erdos_renyi_graph(num_nodes, avg_degree / num_nodes)
+        G = nx.erdos_renyi_graph(num_nodes, avg_degree / num_nodes, seed=seed)
     elif graph_type == "mixed":
         half_nodes = num_nodes // 2
 
