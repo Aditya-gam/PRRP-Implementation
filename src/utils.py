@@ -4,19 +4,6 @@ utils.py
 This module contains utility functions for the P-Regionalization through Recursive Partitioning (PRRP)
 algorithm as described in "Statistical Inference for Spatial Regionalization" (SIGSPATIAL 2023)
 by Hussah Alrashid, Amr Magdy, and Sergio Rey.
-
-Functions:
-    - construct_adjacency_list(areas)
-    - find_connected_components(adj_list)
-    - is_articulation_point(adj_list, node)
-    - find_articulation_points(G)
-    - remove_articulation_area(adj_list, node)
-    - random_seed_selection(adj_list, assigned_regions, method="gapless")
-    - load_graph_from_metis(file_path)
-    - save_graph_to_metis(file_path, adj_list)
-    - find_boundary_areas(region, adj_list)
-    - calculate_low_link_values(adj_list)
-    - parallel_execute(function, data, num_threads=1, use_multiprocessing=False)
 """
 
 import logging
@@ -25,7 +12,6 @@ import concurrent.futures
 import heapq
 from multiprocessing import Pool, cpu_count
 import os
-import copy
 from typing import Dict, List, Set, Any, Tuple, Callable, Iterable
 import geopandas as gpd
 from shapely.geometry.base import BaseGeometry
@@ -33,7 +19,6 @@ from shapely.geometry.base import BaseGeometry
 # Global flag for parallel processing.
 PARALLEL_PROCESSING_ENABLED = False
 
-# Configure logging.
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 handler = logging.StreamHandler()
@@ -72,7 +57,7 @@ def _has_rook_adjacency(geom1: BaseGeometry, geom2: BaseGeometry) -> bool:
         geom2 (BaseGeometry): The second geometry.
 
     Returns:
-        bool: True if the geometries are adjacent via a shared edge; False otherwise.
+        bool: True if adjacent via a shared edge; False otherwise.
     """
     if not geom1.touches(geom2):
         return False
@@ -95,12 +80,8 @@ def _has_rook_adjacency(geom1: BaseGeometry, geom2: BaseGeometry) -> bool:
 def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
     """
     Creates a graph adjacency list using rook adjacency for spatial data or by converting a
-    pre-constructed graph-based input.
-
-    Supported input types:
-        1. Dictionary (pre-constructed adjacency list)
-        2. GeoDataFrame (spatial data using geometry intersections)
-        3. List of dictionaries (custom spatial data)
+    pre-constructed graph-based input. For GeoDataFrame inputs, this function uses a ThreadPoolExecutor
+    to parallelize processing of each row.
 
     Parameters:
         areas (GeoDataFrame, list, or dict): Spatial areas with geometry information or a pre-built adjacency list.
@@ -113,34 +94,40 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
         ValueError: If required geometry information is missing.
     """
     if isinstance(areas, dict):
-        # Update neighbor lists in-place to sets (without duplicating the entire dict)
         for key, value in areas.items():
             if not isinstance(value, set):
                 areas[key] = set(value)
         logger.info(
             "Input is a dictionary; converted neighbor lists to sets in-place.")
-
         return areas
 
-    adj_list: Dict[Any, Set[Any]] = {}
-
     if isinstance(areas, gpd.GeoDataFrame):
-        try:
-            sindex = areas.sindex
-        except Exception as e:
-            logger.error(f"Spatial index creation failed: {e}")
-            raise
-        for idx, area in areas.iterrows():
+        # Use multi-threading to build the adjacency list.
+        adj_list = {}
+
+        def process_row(idx_area):
+            idx, area = idx_area
             geom = area.geometry
-            adj_list[idx] = set()
-            possible_matches = list(sindex.intersection(geom.bounds))
+            neighbors = set()
+            possible_matches = list(areas.sindex.intersection(geom.bounds))
             for other_idx in possible_matches:
                 if other_idx == idx:
                     continue
                 other_geom = areas.loc[other_idx].geometry
                 if _has_rook_adjacency(geom, other_geom):
-                    adj_list[idx].add(other_idx)
-    elif isinstance(areas, list):
+                    neighbors.add(other_idx)
+            return idx, neighbors
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=cpu_count()) as executor:
+            results = executor.map(process_row, areas.iterrows())
+        for idx, nbrs in results:
+            adj_list[idx] = nbrs
+        logger.info("Adjacency list constructed in parallel from GeoDataFrame.")
+        return adj_list
+
+    if isinstance(areas, list):
+        # Processing for list of dicts (same as before, sequentially)
+        adj_list = {}
         if not all(isinstance(area, dict) for area in areas):
             logger.error(
                 "Unsupported list element type; expected dicts with geometry information.")
@@ -177,14 +164,49 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
                     if _has_rook_adjacency(geom_i, geom_j):
                         adj_list[id_i].add(id_j)
             logger.info(
-                "Adjacency list constructed successfully based on geometries.")
-    else:
-        logger.error(
-            "Unsupported type for areas. Expected GeoDataFrame, list, or dict.")
-        raise TypeError(
-            "Unsupported type for areas. Expected GeoDataFrame, list of dicts, or dict.")
+                "Adjacency list constructed from list of dicts based on geometries.")
+            return adj_list
 
-    return adj_list
+    logger.error(
+        "Unsupported type for areas. Expected GeoDataFrame, list, or dict.")
+    raise TypeError(
+        "Unsupported type for areas. Expected GeoDataFrame, list of dicts, or dict.")
+
+
+def parallel_execute(function: Callable[[Any], Any],
+                     data: Iterable[Any],
+                     num_threads: int = 1,
+                     use_multiprocessing: bool = False) -> List[Any]:
+    """
+    Executes a function in parallel over the given data.
+    Automatically selects between multi-threading and multiprocessing based on the flag.
+
+    Parameters:
+        function (Callable[[Any], Any]): The function to apply.
+        data (Iterable[Any]): Data items to process.
+        num_threads (int): Number of threads/processes to use.
+        use_multiprocessing (bool): Whether to use multiprocessing.
+
+    Returns:
+        List[Any]: List of results.
+    """
+    if num_threads > 1 and PARALLEL_PROCESSING_ENABLED:
+        if use_multiprocessing:
+            logger.info("Using multiprocessing for parallel execution.")
+            with Pool(min(num_threads, cpu_count())) as pool:
+                results = pool.map(function, list(data))
+        else:
+            logger.info("Using threading for parallel execution.")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_threads) as executor:
+                results = list(executor.map(function, data))
+        logger.info("Parallel execution completed successfully.")
+        return results
+    else:
+        logger.info(
+            "Parallel processing disabled or num_threads <= 1. Executing sequentially.")
+        results = [function(item) for item in data]
+        logger.info("Sequential execution completed successfully.")
+        return results
 
 
 def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
