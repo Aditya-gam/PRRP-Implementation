@@ -1,3 +1,63 @@
 === PRRP Experiment Results ===
-Timestamp: 2025-03-13 11:40:57
+Timestamp: 2025-03-13 12:07:53
 ========================================
+Error during spatial PRRP execution: run_prrp() got an unexpected keyword argument 'solutions_count'
+----------------------------------------
+=== Graph PRRP Experiment ===
+Dataset: PGPgiantcompo (/Volumes/Coding/Projects/PRRP-Implementation/data/sample/PGPgiantcompo.graph)
+Number of nodes: 10680
+Number of edges: 24316
+Parameters: p = 10, C = 1068, MR = 5, MS = 1088
+Execution Time: 0.20 seconds
+Partition sizes:
+  Partition 1: 10110 nodes
+  Partition 2: 88 nodes
+  Partition 3: 28 nodes
+  Partition 4: 88 nodes
+  Partition 5: 17 nodes
+  Partition 6: 144 nodes
+  Partition 7: 50 nodes
+  Partition 8: 30 nodes
+  Partition 9: 69 nodes
+  Partition 10: 56 nodes
+Total nodes in partitions: 10680
+----------------------------------------
+=== Graph PRRP Experiment ===
+Dataset: synthetic_100k (/Volumes/Coding/Projects/PRRP-Implementation/data/sample/synthetic_large_graph_100k.graph)
+Number of nodes: 100000
+Number of edges: 349980
+Parameters: p = 10, C = 10000, MR = 5, MS = 10020
+Execution Time: 2.65 seconds
+Partition sizes:
+  Partition 1: 15712 nodes
+  Partition 2: 11767 nodes
+  Partition 3: 10662 nodes
+  Partition 4: 12520 nodes
+  Partition 5: 11508 nodes
+  Partition 6: 10173 nodes
+  Partition 7: 10634 nodes
+  Partition 8: 10346 nodes
+  Partition 9: 6611 nodes
+  Partition 10: 67 nodes
+Total nodes in partitions: 100000
+----------------------------------------
+=== Graph PRRP Experiment ===
+Dataset: synthetic_1000k (/Volumes/Coding/Projects/PRRP-Implementation/data/sample/synthetic_large_graph_1000k.graph)
+Number of nodes: 1000000
+Number of edges: 3499980
+Parameters: p = 10, C = 100000, MR = 5, MS = 100020
+Execution Time: 39.78 seconds
+Partition sizes:
+  Partition 1: 149127 nodes
+  Partition 2: 133961 nodes
+  Partition 3: 109730 nodes
+  Partition 4: 107201 nodes
+  Partition 5: 116918 nodes
+  Partition 6: 101275 nodes
+  Partition 7: 110297 nodes
+  Partition 8: 101557 nodes
+  Partition 9: 69817 nodes
+  Partition 10: 117 nodes
+Total nodes in partitions: 1000000
+----------------------------------------
+=== End of PRRP Experiment Results ===
