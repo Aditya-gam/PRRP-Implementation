@@ -106,6 +106,13 @@ def grow_region(adj_list: Dict[int, Set[int]],
         ValueError: If target_cardinality exceeds available areas.
         RuntimeError: If region growth fails after max_retries.
     """
+    # --- NEW CHECK ---
+    if target_cardinality == len(available_areas):
+        logger.info(f"Target cardinality {target_cardinality} equals the number of available areas; "
+                    "returning all available areas as region.")
+        return available_areas.copy()
+    # ------------------
+
     if target_cardinality > len(available_areas):
         error_msg = (f"Target cardinality ({target_cardinality}) exceeds the number of available areas "
                      f"({len(available_areas)}).")
