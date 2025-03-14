@@ -464,32 +464,43 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int]) -> L
 
     Returns:
         List[Set[int]]: List of regions (each a set of area IDs).
+
+    This implementation ensures that the available areas are updated only once per region.
+    The growing step (grow_region) already updates available_areas by removing the initially
+    grown region. Then, if there are any available areas left, merge_disconnected_areas and
+    split_region are applied using a copy of the current available areas so as not to double-subtract
+    the merged areas. If no available areas remain, the adjustments are skipped. Finally,
+    available_areas is updated by removing the final adjusted region.
     """
     if num_regions != len(cardinalities):
         raise ValueError(
             "Number of regions must match the length of the cardinalities list.")
 
-    # Construct adjacency list and ensure neighbor values are sets.
+    # Construct the spatial adjacency list.
     adj_list = construct_adjacency_list(areas)
+    # Ensure all neighbor lists are sets.
     adj_list = {k: set(v) for k, v in adj_list.items()}
     available_areas = set(adj_list.keys())
 
     # Sort cardinalities in descending order.
     cardinalities.sort(reverse=True)
-
     regions = []
+
     for target_cardinality in cardinalities:
         logger.info(f"Growing region with target size: {target_cardinality}")
-
         try:
+            # Grow the region; this call updates available_areas by removing the grown region.
             region = grow_region(adj_list, available_areas, target_cardinality)
+            # If there are any available areas left, adjust the region for connectivity.
             if available_areas:
                 merged_region = merge_disconnected_areas(
-                    adj_list, available_areas, region)
+                    adj_list, available_areas.copy(), region)
                 final_region = split_region(
                     merged_region, target_cardinality, adj_list)
             else:
                 final_region = region
+            # Update the global available areas only once, based on the final region.
+            available_areas.difference_update(final_region)
             regions.append(final_region)
             logger.info(f"Region finalized with {len(final_region)} areas.")
         except Exception as e:
@@ -497,6 +508,7 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int]) -> L
             return []  # Return an empty result indicating failure
 
     return regions
+
 
 # ==============================
 # 7. Parallel Execution of PRRP
