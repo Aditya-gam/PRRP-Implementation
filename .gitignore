@@ -42,3 +42,4 @@ Thumbs.db
 coverage/
 *.cover
 temp/
+combined_code.txt

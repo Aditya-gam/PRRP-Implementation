@@ -2,8 +2,9 @@
 utils.py
 
 This module contains utility functions for the P-Regionalization through Recursive Partitioning (PRRP)
-algorithm as described in "Statistical Inference for Spatial Regionalization" (SIGSPATIAL 2023)
-by Hussah Alrashid, Amr Magdy, and Sergio Rey.
+algorithm. It provides functions for adjacency list construction (with parallelization when a GeoDataFrame
+is used), graph analysis (e.g. connected components, articulation points), and includes a Disjoint Set
+Union (DSU) implementation for efficient region merging.
 """
 
 import logging
@@ -30,7 +31,7 @@ if not logger.handlers:
 
 class DisjointSetUnion:
     """
-    A simple Disjoint Set Union (Union-Find) implementation with path compression.
+    Disjoint Set Union (Union-Find) implementation with path compression.
     """
 
     def __init__(self):
@@ -50,14 +51,7 @@ class DisjointSetUnion:
 
 def _has_rook_adjacency(geom1: BaseGeometry, geom2: BaseGeometry) -> bool:
     """
-    Checks if two geometries share a rook-adjacent boundary (i.e., a common edge).
-
-    Parameters:
-        geom1 (BaseGeometry): The first geometry.
-        geom2 (BaseGeometry): The second geometry.
-
-    Returns:
-        bool: True if adjacent via a shared edge; False otherwise.
+    Checks if two geometries share a rook-adjacent boundary (i.e. a common edge).
     """
     if not geom1.touches(geom2):
         return False
@@ -102,7 +96,6 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
         return areas
 
     if isinstance(areas, gpd.GeoDataFrame):
-        # Use multi-threading to build the adjacency list.
         adj_list = {}
 
         def process_row(idx_area):
@@ -126,7 +119,6 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
         return adj_list
 
     if isinstance(areas, list):
-        # Processing for list of dicts (same as before, sequentially)
         adj_list = {}
         if not all(isinstance(area, dict) for area in areas):
             logger.error(
@@ -168,9 +160,8 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
             return adj_list
 
     logger.error(
-        "Unsupported type for areas. Expected GeoDataFrame, list, or dict.")
-    raise TypeError(
         "Unsupported type for areas. Expected GeoDataFrame, list of dicts, or dict.")
+    raise TypeError("Unsupported type for areas.")
 
 
 def parallel_execute(function: Callable[[Any], Any],
@@ -206,6 +197,11 @@ def parallel_execute(function: Callable[[Any], Any],
             "Parallel processing disabled or num_threads <= 1. Executing sequentially.")
         results = [function(item) for item in data]
         logger.info("Sequential execution completed successfully.")
+        if not results:
+            logger.warning("No results returned from the function execution.")
+        else:
+            logger.debug(f"Results: {results}")
+
         return results
 
 
@@ -265,6 +261,7 @@ def find_articulation_points(G: Dict[int, List[int]]) -> Set[int]:
                 else:
                     if child_count[current] > 1:
                         ap.add(current)
+
     return ap
 
 
@@ -316,10 +313,9 @@ def is_articulation_point(adj_list: Dict[Any, List[Any]], node: Any) -> bool:
         logger.error(f"Node {node} not found in the adjacency list.")
         raise KeyError(f"Node {node} not found in the adjacency list.")
 
-    # ✅ **Fix: Leaf nodes are never articulation points**
     if len(adj_list[node]) <= 1:
         logger.info(
-            f"Node {node} is a leaf node and cannot be an articulation point.")
+            f"Node {node} is a leaf and cannot be an articulation point.")
         return False
 
     def tarjan_ap_util(v: Any, parent: Any, disc: Dict[Any, int],

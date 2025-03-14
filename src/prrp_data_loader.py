@@ -8,10 +8,12 @@ import numpy as np
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 handler = logging.StreamHandler()
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 handler.setFormatter(formatter)
 if not logger.handlers:
     logger.addHandler(handler)
+
 
 def load_shapefile(file_path: str) -> list:
     """
@@ -19,7 +21,7 @@ def load_shapefile(file_path: str) -> list:
 
     Parameters:
         file_path: Path to the shapefile
-    
+
     Returns:
         list: List of mappings between area IDs and their geometry
     """
@@ -31,7 +33,7 @@ def load_shapefile(file_path: str) -> list:
     except Exception as e:
         logger.error(f"Error reading file {file_path}: {e}")
         return None
-    
+
     try:
         area_data = []
         for idx, row in gdf.iterrows():
@@ -39,8 +41,9 @@ def load_shapefile(file_path: str) -> list:
     except Exception as e:
         logger.error(f"Error parsing shapefile: {e}")
         return None
-    
+
     return area_data
+
 
 def load_metis_graph(file_path: str) -> (nx.Graph, dict):
     """
@@ -91,6 +94,7 @@ def load_metis_graph(file_path: str) -> (nx.Graph, dict):
 
     return G, adjacency_list
 
+
 def preprocess_graph(G: nx.Graph, remove_self_loops=True) -> nx.Graph:
     """
     Preprocesses the graph by removing self-loops and ensuring it is undirected.
@@ -115,6 +119,7 @@ def preprocess_graph(G: nx.Graph, remove_self_loops=True) -> nx.Graph:
 
     return G
 
+
 def convert_to_adjacency_list(G: nx.Graph) -> dict:
     """
     Converts the graph to an adjacency list format.
@@ -131,6 +136,7 @@ def convert_to_adjacency_list(G: nx.Graph) -> dict:
         logger.error(f"Error converting to adjacency list: {e}")
         return None
 
+
 def convert_to_edge_list(G: nx.Graph) -> list:
     """
     Converts the graph to an edge list format.
@@ -146,6 +152,7 @@ def convert_to_edge_list(G: nx.Graph) -> list:
     except Exception as e:
         logger.error(f"Error converting to edge list: {e}")
         return None
+
 
 def convert_to_adjacency_matrix(G: nx.Graph) -> np.ndarray:
     """
