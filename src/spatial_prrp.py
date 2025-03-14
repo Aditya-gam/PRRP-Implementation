@@ -330,11 +330,6 @@ def split_region(region: Set[int],
     Adjusts a region’s size by removing excess areas to meet the target cardinality,
     while ensuring that the region remains spatially contiguous.
 
-    If the region exceeds its target cardinality (due to the merging phase), this function
-    computes the number of excess areas and removes them using a randomized boundary area
-    removal strategy. After removals, if the region becomes fragmented into multiple connected
-    components, it restores areas to maintain the target cardinality.
-
     Parameters:
         region (Set[int]): The set of area IDs currently in the region.
         target_cardinality (int): The required number of areas for the region.
@@ -348,8 +343,7 @@ def split_region(region: Set[int],
     """
     current_size = len(region)
     if current_size < target_cardinality:
-        error_msg = (
-            f"Region size ({current_size}) is below the target cardinality ({target_cardinality}).")
+        error_msg = f"Region size ({current_size}) is below the target cardinality ({target_cardinality})."
         logger.error(error_msg)
         raise ValueError(error_msg)
 
@@ -359,42 +353,48 @@ def split_region(region: Set[int],
         return region
 
     excess_count = current_size - target_cardinality
-    logger.info(
-        f"Splitting region: current size = {current_size}, target = {target_cardinality}, "
-        f"excess areas to remove = {excess_count}."
-    )
+    logger.info(f"Splitting region: current size = {current_size}, target = {target_cardinality}, "
+                f"excess areas to remove = {excess_count}.")
 
-    # Remove excess boundary areas until the region size matches the target.
-    adjusted_region = remove_boundary_areas(region, excess_count, adj_list)
+    adjusted_region = region.copy()
 
-    # Final connectivity check: rebuild a subgraph and verify that the region is contiguous.
-    sub_adj_final: Dict[int, List[int]] = {
-        area: list(adj_list.get(area, set()) & adjusted_region) for area in adjusted_region
-    }
-    final_components = find_connected_components(sub_adj_final)
+    while excess_count > 0:
+        boundary = find_boundary_areas(adjusted_region, adj_list)
+        if not boundary:
+            logger.error("No boundary areas found; cannot remove further.")
+            break
 
-    if len(final_components) > 1:
-        largest_component = max(final_components, key=len)
-        removed_components = [
-            comp for comp in final_components if comp != largest_component]
+        area_to_remove = random.choice(list(boundary))
+        adjusted_region.remove(area_to_remove)
+        excess_count -= 1
+        logger.info(
+            f"Removed boundary area {area_to_remove}; {excess_count} remaining.")
 
-        logger.warning(
-            f"After splitting, region is fragmented into {len(final_components)} components; "
-            f"keeping largest component with {len(largest_component)} areas."
-        )
-        adjusted_region = largest_component
+        # Check spatial contiguity after each removal
+        sub_adj = {area: list(adj_list.get(area, set()) & adjusted_region)
+                   for area in adjusted_region}
+        components = find_connected_components(sub_adj)
 
-        # Restore removed areas to maintain target cardinality
-        while len(adjusted_region) < target_cardinality and removed_components:
-            extra_areas = removed_components.pop()
-            extra_needed = target_cardinality - len(adjusted_region)
+        if len(components) > 1:
+            # Region is fragmented, keep the largest and reassign lost areas
+            largest_component = max(components, key=len)
+            removed_components = [
+                comp for comp in components if comp != largest_component]
 
-            # Add only as many areas as required to meet the target size
-            extra_areas_to_add = list(extra_areas)[:extra_needed]
-            adjusted_region.update(extra_areas_to_add)
+            logger.warning(
+                f"Region split into {len(components)} parts. Keeping largest with {len(largest_component)} areas.")
+            adjusted_region = largest_component
 
-            logger.info(
-                f"Restored {len(extra_areas_to_add)} areas to maintain target size.")
+            # Restore removed areas if needed
+            while len(adjusted_region) < target_cardinality and removed_components:
+                extra_areas = removed_components.pop()
+                extra_needed = target_cardinality - len(adjusted_region)
+
+                extra_areas_to_add = list(extra_areas)[:extra_needed]
+                adjusted_region.update(extra_areas_to_add)
+
+                logger.info(
+                    f"Restored {len(extra_areas_to_add)} areas to maintain target size.")
 
     logger.info(
         f"Region splitting complete. Final region size is {len(adjusted_region)} areas.")
