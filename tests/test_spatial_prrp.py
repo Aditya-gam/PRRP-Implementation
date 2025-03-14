@@ -9,14 +9,17 @@ This test suite covers:
   - Region splitting (split_region)
   - Full PRRP execution (run_prrp)
   - Parallel execution of PRRP (run_parallel_prrp)
+  - Loading and processing of a real spatial dataset
+  - Construction and PRRP execution on synthetic grid data
 
 Each test ensures that spatial contiguity and cardinality constraints are maintained.
 """
 
+import os
 import unittest
 import random
 from copy import deepcopy
-from typing import Dict, Set, List, Any
+from typing import Dict, Set, List, Any, Tuple
 
 # Import functions to be tested from the PRRP module.
 from src.spatial_prrp import (
@@ -29,6 +32,12 @@ from src.spatial_prrp import (
 )
 # Import utility functions.
 from src.utils import find_connected_components, construct_adjacency_list
+# Import the shapefile loader from the data loader module.
+from src.prrp_data_loader import load_shapefile
+
+# For generating synthetic geometries.
+from shapely.geometry import box
+import geopandas as gpd
 
 
 # ==============================
@@ -59,7 +68,7 @@ def generate_test_graph() -> Dict[int, Set[int]]:
 
 def generate_test_areas() -> List[Dict[str, Any]]:
     """
-    Generates a synthetic list of spatial areas with dummy geometry.
+    Generates a synthetic list of spatial areas with dummy geometry (None).
 
     Returns:
         List[Dict[str, Any]]: A list of spatial area dictionaries.
@@ -67,10 +76,72 @@ def generate_test_areas() -> List[Dict[str, Any]]:
     return [{'id': i, 'geometry': None} for i in range(1, 13)]
 
 
+def generate_grid_areas(rows: int, cols: int) -> List[Dict[str, Any]]:
+    """
+    Generates a grid of square polygons representing spatial areas.
+
+    Each area is a square of unit length. The 'id' of the area is a sequential
+    number starting at 1. The grid is arranged such that the cell at row i and column j
+    has coordinates (j, i) to (j+1, i+1).
+
+    Parameters:
+        rows (int): Number of rows in the grid.
+        cols (int): Number of columns in the grid.
+
+    Returns:
+        List[Dict[str, Any]]: A list of spatial area dictionaries with 'id' and 'geometry'.
+    """
+    areas = []
+    for i in range(rows):
+        for j in range(cols):
+            area_id = i * cols + j + 1
+            polygon = box(j, i, j+1, i+1)
+            areas.append({'id': area_id, 'geometry': polygon})
+    return areas
+
+
+def generate_grid_test_data(rows: int, cols: int) -> Tuple[List[Dict[str, Any]], Dict[int, Set[int]]]:
+    """
+    Generates synthetic grid test data and computes the expected rook-adjacency list.
+
+    The expected adjacency is computed based on 4-neighbor connectivity (top, bottom, left, right).
+
+    Parameters:
+        rows (int): Number of rows in the grid.
+        cols (int): Number of columns in the grid.
+
+    Returns:
+        Tuple:
+            - List[Dict[str, Any]]: The list of spatial areas with square geometries.
+            - Dict[int, Set[int]]: The expected adjacency list mapping area ids to neighbor ids.
+    """
+    areas = generate_grid_areas(rows, cols)
+    expected_adj_list = {}
+    for i in range(rows):
+        for j in range(cols):
+            area_id = i * cols + j + 1
+            neighbors = set()
+            # Top neighbor.
+            if i > 0:
+                neighbors.add((i - 1) * cols + j + 1)
+            # Bottom neighbor.
+            if i < rows - 1:
+                neighbors.add((i + 1) * cols + j + 1)
+            # Left neighbor.
+            if j > 0:
+                neighbors.add(i * cols + (j - 1) + 1)
+            # Right neighbor.
+            if j < cols - 1:
+                neighbors.add(i * cols + (j + 1) + 1)
+            expected_adj_list[area_id] = neighbors
+    return areas, expected_adj_list
+
+
 # ==============================
 # Test Suite
 # ==============================
 class TestSpatialPRRP(unittest.TestCase):
+
     def setUp(self):
         """
         Initializes test data before each test case.
@@ -100,7 +171,8 @@ class TestSpatialPRRP(unittest.TestCase):
 
         # Test with no assigned regions (first region case).
         seed2 = get_gapless_seed(self.adj_list, self.available_areas, set())
-        self.assertIn(seed2, self.available_areas)
+        self.assertIn(seed2, self.available_areas,
+                      "With no assigned regions, seed should be from available areas.")
 
         # Edge Case: empty available_areas should raise a ValueError.
         with self.assertRaises(ValueError):
@@ -146,13 +218,10 @@ class TestSpatialPRRP(unittest.TestCase):
         The disconnected component (containing area 12) should be merged into the current region.
         """
         region = {1, 2, 3, 4}
-        # In the PRRP algorithm, available_areas should be the set of unassigned areas,
-        # so we remove the already assigned regions.
         available = deepcopy(self.available_areas) - region
 
         # Simulate disconnection for area 12:
-        # Area 12 is connected to areas 8 and 11 in the full graph.
-        # By removing areas 8 and 11 from available, area 12 becomes isolated.
+        # Remove areas 8 and 11 from available to isolate area 12.
         available.discard(8)
         available.discard(11)
         available.add(12)  # Ensure area 12 is in available
@@ -237,14 +306,14 @@ class TestSpatialPRRP(unittest.TestCase):
             self.assertEqual(union_areas, expected_areas,
                              "Each solution must assign all areas.")
 
-        # Check for statistical independence: the solutions should not be all identical.
+        # Check for statistical independence: the solutions should not all be identical.
         unique_solutions = {frozenset(frozenset(region) for region in sol)
                             for sol in parallel_solutions}
         self.assertGreater(len(unique_solutions), 1,
                            "Parallel solutions should be statistically independent and not identical.")
 
     # ==============================
-    # 7. Edge Cases
+    # 7. Test run_prrp_invalid_cardinalities
     # ==============================
     def test_run_prrp_invalid_cardinalities(self):
         """
@@ -254,6 +323,145 @@ class TestSpatialPRRP(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_prrp(self.areas, num_regions=4, cardinalities=[
                      5, 5, 5])  # 4 != len([5,5,5])
+
+    # ==============================
+    # New Tests: Real Dataset Integration
+    # ==============================
+    def test_load_shapefile(self):
+        """
+        Tests that the shapefile is loaded correctly from the real dataset.
+        Verifies that a non-empty list of areas is returned and that each area
+        has the expected 'id' and 'geometry' keys.
+        """
+        shapefile_path = os.path.abspath(os.path.join(
+            os.getcwd(), 'data/cb_2015_42_tract_500k/cb_2015_42_tract_500k.shp'))
+        if not os.path.exists(shapefile_path):
+            self.skipTest(f"Shapefile not found at {shapefile_path}")
+        areas = load_shapefile(shapefile_path)
+        self.assertIsNotNone(areas, "Loaded areas should not be None.")
+        self.assertGreater(len(areas), 0, "Loaded areas should not be empty.")
+        for area in areas:
+            self.assertIn('id', area, "Each area must have an 'id' key.")
+            self.assertIn('geometry', area,
+                          "Each area must have a 'geometry' key.")
+            self.assertIsNotNone(
+                area['geometry'], "Area geometry should not be None.")
+
+    def test_run_prrp_real_dataset(self):
+        """
+        Tests full PRRP execution using the real dataset.
+        Verifies that the number of regions and area assignments are as expected.
+        """
+        shapefile_path = os.path.abspath(os.path.join(
+            os.getcwd(), 'data/cb_2015_42_tract_500k/cb_2015_42_tract_500k.shp'))
+        if not os.path.exists(shapefile_path):
+            self.skipTest(f"Shapefile not found at {shapefile_path}")
+        areas = load_shapefile(shapefile_path)
+        total_areas = len(areas)
+        # Create a scenario with 5 regions and random target sizes that sum to total_areas.
+        num_regions = 5
+        cardinalities = [random.randint(5, 15) for _ in range(num_regions - 1)]
+        cardinalities.append(total_areas - sum(cardinalities))
+        regions = run_prrp(areas, num_regions, cardinalities)
+        self.assertEqual(len(regions), num_regions,
+                         "Should produce the correct number of regions for real data.")
+        all_assigned = set().union(*regions)
+        expected_ids = {area['id'] for area in areas}
+        self.assertEqual(all_assigned, expected_ids,
+                         "All areas must be assigned in the real dataset.")
+
+    def test_run_parallel_prrp_real_dataset(self):
+        """
+        Tests parallel PRRP execution on the real dataset.
+        Verifies that parallel solutions are produced and are valid.
+        """
+        shapefile_path = os.path.abspath(os.path.join(
+            os.getcwd(), 'data/cb_2015_42_tract_500k/cb_2015_42_tract_500k.shp'))
+        if not os.path.exists(shapefile_path):
+            self.skipTest(f"Shapefile not found at {shapefile_path}")
+        areas = load_shapefile(shapefile_path)
+        total_areas = len(areas)
+        num_regions = 5
+        cardinalities = [random.randint(5, 15) for _ in range(num_regions - 1)]
+        cardinalities.append(total_areas - sum(cardinalities))
+        solutions_count = 3
+        parallel_solutions = run_parallel_prrp(
+            areas, num_regions, cardinalities, solutions_count=solutions_count, num_threads=2)
+        self.assertEqual(len(parallel_solutions), solutions_count,
+                         "Parallel execution should produce the requested number of solutions.")
+        expected_ids = {area['id'] for area in areas}
+        for solution in parallel_solutions:
+            self.assertEqual(len(solution), num_regions,
+                             "Each solution must have the correct number of regions.")
+            union_ids = set().union(*solution)
+            self.assertEqual(union_ids, expected_ids,
+                             "Each parallel solution must assign all areas.")
+
+    # ==============================
+    # New Tests: Synthetic Grid Data
+    # ==============================
+    def test_construct_adjacency_list_grid(self):
+        """
+        Tests that the construct_adjacency_list function creates the correct
+        adjacency list for synthetic grid data.
+        """
+        rows, cols = 3, 4  # Create a 3x4 grid.
+        areas, expected_adj_list = generate_grid_test_data(rows, cols)
+        # Convert list of dicts to a GeoDataFrame.
+        gdf = gpd.GeoDataFrame(areas)
+        adj_list = construct_adjacency_list(gdf)
+        # Convert neighbor lists to sets.
+        adj_list = {k: set(v) for k, v in adj_list.items()}
+        self.assertEqual(adj_list, expected_adj_list,
+                         "Constructed adjacency list for grid does not match expected.")
+
+    def test_run_prrp_grid_data(self):
+        """
+        Tests full PRRP execution on synthetic grid data.
+        Verifies that:
+          - The correct number of regions are produced.
+          - Each region meets its cardinality constraint.
+          - The union of regions covers all area IDs in the grid.
+        """
+        rows, cols = 4, 5  # Create a 4x5 grid (20 areas).
+        areas, _ = generate_grid_test_data(rows, cols)
+        total_areas = len(areas)
+        num_regions = 4
+        # Generate random cardinalities that sum to total_areas.
+        cardinalities = [random.randint(3, 7) for _ in range(num_regions - 1)]
+        cardinalities.append(total_areas - sum(cardinalities))
+        regions = run_prrp(areas, num_regions, cardinalities)
+        self.assertEqual(len(regions), num_regions,
+                         "Should produce the correct number of regions for grid data.")
+        all_assigned = set().union(*regions)
+        expected_ids = {area['id'] for area in areas}
+        self.assertEqual(all_assigned, expected_ids,
+                         "All grid areas must be assigned.")
+
+    def test_run_parallel_prrp_grid_data(self):
+        """
+        Tests parallel PRRP execution on synthetic grid data.
+        Verifies that parallel solutions are produced and that each solution covers
+        all areas in the grid.
+        """
+        rows, cols = 5, 5  # Create a 5x5 grid (25 areas).
+        areas, _ = generate_grid_test_data(rows, cols)
+        total_areas = len(areas)
+        num_regions = 3
+        cardinalities = [random.randint(5, 10) for _ in range(num_regions - 1)]
+        cardinalities.append(total_areas - sum(cardinalities))
+        solutions_count = 3
+        parallel_solutions = run_parallel_prrp(
+            areas, num_regions, cardinalities, solutions_count=solutions_count, num_threads=2)
+        self.assertEqual(len(parallel_solutions), solutions_count,
+                         "Parallel execution should produce the requested number of solutions.")
+        expected_ids = {area['id'] for area in areas}
+        for solution in parallel_solutions:
+            self.assertEqual(len(solution), num_regions,
+                             "Each solution must have the correct number of regions for grid data.")
+            union_ids = set().union(*solution)
+            self.assertEqual(union_ids, expected_ids,
+                             "Each parallel solution must assign all grid areas.")
 
 
 if __name__ == '__main__':
