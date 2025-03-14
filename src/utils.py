@@ -51,7 +51,7 @@ class DisjointSetUnion:
 
 def _has_rook_adjacency(geom1: BaseGeometry, geom2: BaseGeometry) -> bool:
     """
-    Checks if two geometries share a rook-adjacent boundary (i.e. a common edge).
+    Checks if two geometries share a rook-adjacent boundary (i.e., a common edge).
     """
     if not geom1.touches(geom2):
         return False
@@ -74,8 +74,13 @@ def _has_rook_adjacency(geom1: BaseGeometry, geom2: BaseGeometry) -> bool:
 def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
     """
     Creates a graph adjacency list using rook adjacency for spatial data or by converting a
-    pre-constructed graph-based input. For GeoDataFrame inputs, this function uses a ThreadPoolExecutor
-    to parallelize processing of each row.
+    pre-constructed graph-based input.
+
+    For GeoDataFrame inputs, this function uses a ThreadPoolExecutor to parallelize the processing.
+    **If the GeoDataFrame contains an 'id' column, that column is used as the index so that the keys
+    in the returned adjacency list correspond to the actual area IDs rather than the default 0-based index.
+    Note that the spatial index returns integer positions. These are used with .iloc to get the
+    actual index label from the GeoDataFrame.**
 
     Parameters:
         areas (GeoDataFrame, list, or dict): Spatial areas with geometry information or a pre-built adjacency list.
@@ -96,29 +101,38 @@ def construct_adjacency_list(areas: Any) -> Dict[Any, Set[Any]]:
         return areas
 
     if isinstance(areas, gpd.GeoDataFrame):
+        # If the GeoDataFrame has an 'id' column, use it as the index.
+        if 'id' in areas.columns:
+            areas = areas.set_index('id')
         adj_list = {}
 
-        def process_row(idx_area):
-            idx, area = idx_area
+        def process_row(item):
+            key, area = item  # key is the index label (e.g., 1,2,...)
             geom = area.geometry
             neighbors = set()
+            # Use the spatial index for fast neighbor lookup.
+            # Note: the intersection returns positional indices (0-based positions)
             possible_matches = list(areas.sindex.intersection(geom.bounds))
-            for other_idx in possible_matches:
-                if other_idx == idx:
+            for pos in possible_matches:
+                # Retrieve the row by position using .iloc.
+                other_row = areas.iloc[pos]
+                other_label = other_row.name
+                if other_label == key:
                     continue
-                other_geom = areas.loc[other_idx].geometry
+                other_geom = other_row.geometry
                 if _has_rook_adjacency(geom, other_geom):
-                    neighbors.add(other_idx)
-            return idx, neighbors
+                    neighbors.add(other_label)
+            return key, neighbors
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=cpu_count()) as executor:
             results = executor.map(process_row, areas.iterrows())
-        for idx, nbrs in results:
-            adj_list[idx] = nbrs
+        for key, nbrs in results:
+            adj_list[key] = nbrs
         logger.info("Adjacency list constructed in parallel from GeoDataFrame.")
         return adj_list
 
     if isinstance(areas, list):
+        # Processing for list of dicts (sequentially).
         adj_list = {}
         if not all(isinstance(area, dict) for area in areas):
             logger.error(
