@@ -10,7 +10,7 @@ import os
 import random
 import logging
 import heapq
-from typing import Dict, Set, List, Any
+from typing import Dict, Set, List, Any, Optional
 from multiprocessing import Pool, cpu_count
 
 from src.prrp_data_loader import load_shapefile
@@ -40,41 +40,55 @@ def get_gapless_seed(adj_list: Dict[int, Set[int]],
                      available_areas: Set[int],
                      assigned_regions: Set[int]) -> int:
     """
-    Selects a gapless seed for region growing by using a heap-based approach.
-    For the first region, it randomly picks an area from available_areas.
-    For subsequent regions, it computes a connectivity score for each unassigned
-    area (number of neighbors in assigned_regions) and uses a min-heap (with negative scores)
-    to pick the area with the highest connectivity.
+    Selects a gapless seed for region growing. For the first region, a seed is randomly
+    chosen from all available areas. For subsequent regions, the algorithm attempts to choose
+    a seed from the set of unassigned areas that are spatial neighbors of any already assigned area.
+    This helps ensure that the remaining unassigned areas stay contiguous, which is critical when
+    growing regions under a strict cardinality constraint.
 
     Parameters:
-        adj_list (Dict[int, Set[int]]): Adjacency list of spatial areas.
-        available_areas (Set[int]): Set of unassigned area IDs.
-        assigned_regions (Set[int]): Set of already assigned area IDs.
+        adj_list (Dict[int, Set[int]]): The spatial adjacency list mapping area IDs to the set of
+                                        neighboring area IDs.
+        available_areas (Set[int]): The set of area IDs that have not yet been assigned to any region.
+        assigned_regions (Set[int]): The set of area IDs that have been assigned to regions.
 
     Returns:
-        int: Selected seed area ID.
+        int: The ID of the chosen seed area.
 
     Raises:
-        ValueError: If available_areas is empty.
+        ValueError: If there are no available areas from which to select a seed.
     """
     if not available_areas:
         logger.error("No available areas to select a seed.")
         raise ValueError("No available areas to select a seed.")
 
+    # If no regions have yet been assigned, pick a seed at random.
     if not assigned_regions:
         seed = random.choice(list(available_areas))
         logger.info(f"First seed selected randomly: {seed}")
         return seed
 
-    # Build a heap of (negative connectivity, random tie-breaker, area)
+    # Compute candidate seeds as the unassigned neighbors of the already assigned areas.
+    candidate_seeds = set()
+    for area in assigned_regions:
+        # Only consider neighbors that are still available.
+        candidate_seeds.update(adj_list.get(area, set()) & available_areas)
+
+    # If there are any candidate seeds from the border, choose one uniformly at random.
+    if candidate_seeds:
+        seed = random.choice(list(candidate_seeds))
+        logger.info(
+            f"Gapless seed selected from neighbors: {seed} (Candidates: {candidate_seeds})")
+        return seed
+
+    # Otherwise, fall back to the original method:
     heap = []
     for area in available_areas:
         connectivity = sum(1 for nbr in adj_list.get(
-            area, []) if nbr in assigned_regions)
-        # Negative score because we want the area with highest connectivity
+            area, set()) if nbr in assigned_regions)
         heapq.heappush(heap, (-connectivity, random.random(), area))
     best_candidate = heapq.heappop(heap)[2]
-    logger.info(f"Gapless seed selected using heap: {best_candidate}")
+    logger.info(f"Gapless seed selected using heap fallback: {best_candidate}")
 
     return best_candidate
 
@@ -85,33 +99,29 @@ def get_gapless_seed(adj_list: Dict[int, Set[int]],
 def grow_region(adj_list: Dict[int, Set[int]],
                 available_areas: Set[int],
                 target_cardinality: int,
-                max_retries: int = 5) -> Set[int]:
+                max_retries: int = 5,
+                initial_seed: Optional[int] = None) -> Set[int]:
     """
-    Grows a spatially contiguous region to reach the target cardinality.
-
-    Instead of randomly selecting neighbors, this version uses a priority queue to
-    always select the neighbor with the highest number of unassigned neighbors,
-    thereby reducing retries and fragmentation.
+    Grows a spatially contiguous region until it reaches the target cardinality.
 
     Parameters:
-        adj_list (Dict[int, Set[int]]): Adjacency list of spatial areas.
-        available_areas (Set[int]): Unassigned area IDs (this set will NOT be modified in this function).
-        target_cardinality (int): The required region size.
-        max_retries (int): Maximum allowed retries for growing the region.
+      adj_list (Dict[int, Set[int]]): The spatial adjacency graph.
+      available_areas (Set[int]): Set of area IDs that have not yet been assigned.
+      target_cardinality (int): Desired number of areas in the region.
+      max_retries (int, optional): Maximum number of attempts if region growth fails.
+      initial_seed (Optional[int], optional): If provided and available, used as the starting seed.
 
     Returns:
-        Set[int]: Set of area IDs forming the region.
+      Set[int]: The grown region.
 
     Raises:
-        ValueError: If target_cardinality exceeds available areas.
-        RuntimeError: If region growth fails after max_retries.
+      ValueError: if target_cardinality exceeds the number of available areas.
+      RuntimeError: if a region meeting the target is not grown after max_retries.
     """
-    # --- NEW CHECK ---
     if target_cardinality == len(available_areas):
-        logger.info(f"Target cardinality {target_cardinality} equals the number of available areas; "
-                    "returning all available areas as region.")
+        logger.info(
+            f"Target cardinality {target_cardinality} equals the number of available areas; returning all available areas.")
         return available_areas.copy()
-    # ------------------
 
     if target_cardinality > len(available_areas):
         error_msg = (f"Target cardinality ({target_cardinality}) exceeds the number of available areas "
@@ -119,26 +129,29 @@ def grow_region(adj_list: Dict[int, Set[int]],
         logger.error(error_msg)
         raise ValueError(error_msg)
 
-    full_areas = set(adj_list.keys())
     retries = 0
-
     while retries < max_retries:
         logger.info(f"Region growing attempt {retries + 1}/{max_retries}")
         temp_available = available_areas.copy()
-        assigned_regions = full_areas - temp_available
-
-        try:
-            seed = get_gapless_seed(adj_list, temp_available, assigned_regions)
-        except ValueError as e:
-            logger.error(f"Error selecting seed: {e}")
-            raise
+        # Use the provided seed if available; otherwise, select one randomly.
+        if initial_seed is not None and initial_seed in temp_available:
+            seed = initial_seed
+            logger.info(f"Using provided seed: {seed}")
+        else:
+            full_areas = set(adj_list.keys())
+            assigned_regions = full_areas - temp_available
+            try:
+                seed = get_gapless_seed(
+                    adj_list, temp_available, assigned_regions)
+            except ValueError as e:
+                logger.error(f"Error selecting seed: {e}")
+                raise
 
         region = {seed}
         temp_available.remove(seed)
         logger.debug(
             f"Started region growing with seed {seed}. Initial region: {region}")
 
-        # Initialize a priority queue (heap) for expansion candidates.
         frontier_heap = []
         for neighbor in adj_list.get(seed, set()):
             if neighbor in temp_available:
@@ -153,16 +166,13 @@ def grow_region(adj_list: Dict[int, Set[int]],
                     "Frontier is empty; unable to expand region further.")
                 break
 
-            # Pop candidate with highest connectivity
             _, _, candidate = heapq.heappop(frontier_heap)
             if candidate not in temp_available:
-                continue  # Skip stale entries
+                continue
             region.add(candidate)
             temp_available.remove(candidate)
             logger.debug(
                 f"Added area {candidate} to region. Current region size: {len(region)}.")
-
-            # Add new neighbors from the candidate
             for neighbor in adj_list.get(candidate, set()):
                 if neighbor in temp_available:
                     score = len(adj_list.get(neighbor, set()
@@ -173,12 +183,13 @@ def grow_region(adj_list: Dict[int, Set[int]],
         if len(region) == target_cardinality:
             logger.info(
                 f"Successfully grown region with target cardinality {target_cardinality}: {region}")
-            # NOTE: Do not update available_areas here; let the caller (run_prrp) handle it.
             return region
         else:
             retries += 1
             logger.warning(
                 f"Region growth attempt {retries} failed to reach the target cardinality. Retrying with a new seed.")
+            # Reset initial_seed for subsequent retries.
+            initial_seed = None
 
     error_msg = f"Region growth failed after {max_retries} attempts."
     logger.error(error_msg)
@@ -191,15 +202,6 @@ def grow_region(adj_list: Dict[int, Set[int]],
 def find_largest_component(connected_components: List[Set[int]]) -> Set[int]:
     """
     Identifies the largest contiguous connected component among the provided components.
-
-    Parameters:
-        connected_components (List[Set[int]]): A list of sets, where each set represents a connected component of area IDs.
-
-    Returns:
-        Set[int]: The largest connected component (by number of areas).
-
-    Raises:
-        ValueError: If no connected components are provided.
     """
     if not connected_components:
         logger.error("No connected components found.")
@@ -208,36 +210,22 @@ def find_largest_component(connected_components: List[Set[int]]) -> Set[int]:
     largest_component = max(connected_components, key=len)
     logger.info(
         f"Largest connected component has {len(largest_component)} areas.")
-
     return largest_component
 
 
 # ==============================
 # 4. Optimized Region Merging Phase using Union-Find (DSU)
 # ==============================
-def merge_disconnected_areas(
-    adj_list: Dict[int, Set[int]],
-    available_areas: Set[int],
-    current_region: Set[int],
-    parallelize: bool = False
-) -> Set[int]:
+def merge_disconnected_areas(adj_list: Dict[int, Set[int]],
+                             available_areas: Set[int],
+                             current_region: Set[int],
+                             parallelize: bool = False) -> Set[int]:
     """
-    Merges disconnected unassigned areas into the current region using Union-Find (DSU)
-    to efficiently identify connected components.
-
-    Parameters:
-        adj_list (Dict[int, Set[int]]): Neighborhood graph.
-        available_areas (Set[int]): Unassigned area IDs.
-        current_region (Set[int]): Current region to be merged with disconnected areas.
-        parallelize (bool): Flag for parallel execution (not implemented here).
-
-    Returns:
-        Set[int]: Updated current_region after merging.
+    Merges disconnected unassigned areas into the current region using DSU.
     """
     if parallelize:
         logger.info("Parallelize flag set, but sequential DSU merging is used.")
 
-    # Build DSU for available areas.
     dsu = DisjointSetUnion()
     for area in available_areas:
         dsu.parent[area] = area
@@ -247,7 +235,6 @@ def merge_disconnected_areas(
             if neighbor in available_areas:
                 dsu.union(area, neighbor)
 
-    # Group areas by their root.
     components = {}
     for area in available_areas:
         root = dsu.find(area)
@@ -260,7 +247,6 @@ def merge_disconnected_areas(
 
     largest_component = find_largest_component(components_list)
 
-    # Merge all smaller components into current_region.
     merged_areas = set()
     for comp in components_list:
         if comp != largest_component:
@@ -288,36 +274,17 @@ def remove_boundary_areas(region: Set[int],
                           excess_count: int,
                           adj_list: Dict[int, Set[int]]) -> Set[int]:
     """
-    Randomly removes boundary areas from a region until the specified excess count
-    is removed, while ensuring that spatial contiguity is maintained.
-
-    The function computes the set of boundary areas (areas that have at least one
-    neighbor outside the region) and randomly removes one area at a time. After each
-    removal, the connectivity of the updated region is checked. If the region splits
-    into multiple connected components, only the largest component is retained.
-
-    Parameters:
-        region (Set[int]): The current set of area IDs in the region.
-        excess_count (int): The number of areas to remove from the region.
-        adj_list (Dict[int, Set[int]]): The adjacency list representing spatial neighbors.
-
-    Returns:
-        Set[int]: The updated region after removing the excess boundary areas.
-
-    Raises:
-        RuntimeError: If no boundary areas can be found to remove when needed.
+    Randomly removes boundary areas from a region until the specified excess count is removed,
+    ensuring that spatial contiguity is maintained.
     """
-    # Work on a copy so as not to modify the input region directly.
     adjusted_region = region.copy()
     while excess_count > 0:
-        # Identify boundary areas
         boundary = find_boundary_areas(
             adjusted_region, {k: list(v) for k, v in adj_list.items()})
         if not boundary:
             logger.error("No boundary areas found; cannot remove further.")
             raise RuntimeError("No boundary areas available for removal.")
 
-        # Select the boundary area with the least internal connectivity
         candidate = min(boundary, key=lambda area: len(
             adj_list.get(area, set()).intersection(adjusted_region)))
         adjusted_region.remove(candidate)
@@ -325,20 +292,17 @@ def remove_boundary_areas(region: Set[int],
         logger.info(
             f"Removed boundary area {candidate}; {excess_count} removals remaining.")
 
-        # Check spatial contiguity
         sub_adj = {area: list(set(adj_list.get(area, set()))
                               & adjusted_region) for area in adjusted_region}
         components = find_connected_components(sub_adj)
 
         if len(components) > 1:
-            # If fragmentation occurs, keep the largest component
             largest_component = max(components, key=len)
             removed = adjusted_region - largest_component
             adjusted_region = largest_component
             logger.warning(
                 "Region split into multiple parts. Keeping largest component.")
-            excess_count += len(removed)  # Adjust excess count
-
+            excess_count += len(removed)
     return adjusted_region
 
 
@@ -346,20 +310,8 @@ def split_region(region: Set[int],
                  target_cardinality: int,
                  adj_list: Dict[int, Set[int]]) -> Set[int]:
     """
-    Adjusts the region size to meet target cardinality by removing least-connected boundary areas.
-    Prioritizes removal based on the number of internal connections (least connected first).
-    Ensures the final region is contiguous.
-
-    Parameters:
-        region (Set[int]): Current region.
-        target_cardinality (int): Desired number of areas.
-        adj_list (Dict[int, Set[int]]): Neighborhood graph.
-
-    Returns:
-        Set[int]: Adjusted region meeting target cardinality.
-
-    Raises:
-        ValueError: If region size is below target.
+    Adjusts the region size to meet the target cardinality by removing excess boundary areas.
+    Optionally, attempts to restore areas if the region becomes too small.
     """
     current_size = len(region)
     if current_size < target_cardinality:
@@ -378,17 +330,14 @@ def split_region(region: Set[int],
     adjusted_region = remove_boundary_areas(region, excess_count, adj_list)
     removed_areas = set()
 
-    # Attempt to restore areas if region is too small.
     if len(adjusted_region) < target_cardinality:
         needed_count = target_cardinality - len(adjusted_region)
         logger.warning(
             f"Region too small after splitting. Attempting to restore {needed_count} areas.")
-
         removed_areas = region - adjusted_region
         for area in list(removed_areas):
             if needed_count <= 0:
                 break
-
             if any(neighbor in adjusted_region for neighbor in adj_list.get(area, [])):
                 adjusted_region.add(area)
                 removed_areas.remove(area)
@@ -398,11 +347,9 @@ def split_region(region: Set[int],
                 if needed_count == 0:
                     break
 
-    # Final connectivity check: if the region is fragmented, keep the largest connected component.
     final_sub_adj = {area: list(adj_list.get(
         area, set()) & adjusted_region) for area in adjusted_region}
     final_components = find_connected_components(final_sub_adj)
-
     if len(final_components) > 1:
         final_region = max(final_components, key=len)
         logger.warning(
@@ -416,68 +363,104 @@ def split_region(region: Set[int],
     else:
         logger.warning(
             f"Final region size {len(adjusted_region)} does not match target {target_cardinality}.")
-
     return adjusted_region
 
 
 # ==============================
 # 6. PRRP Execution and Parallel Runs
 # ==============================
-def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int]) -> List[Set[int]]:
+def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int],
+             max_solution_attempts: int = 10) -> List[Set[int]]:
     """
-    Executes the full PRRP algorithm to form the specified number of regions while maintaining
-    spatial contiguity and satisfying cardinality constraints.
+    Executes the full PRRP algorithm to partition the areas into 'num_regions' regions
+    that satisfy the cardinality constraints while maintaining spatial contiguity.
+
+    The algorithm implements gapless seed selection:
+      - The first region uses a random seed.
+      - For subsequent regions, a "seed queue" is maintained from the unassigned neighbors
+        of already grown regions. This helps to keep the unassigned areas contiguous.
 
     Parameters:
-        areas (List[Dict]): List of spatial areas (each with 'id' and 'geometry').
-        num_regions (int): Number of regions to create.
-        cardinalities (List[int]): List of target sizes for each region.
+      areas (List[Dict]): List of areas, each with at least "id" and "geometry" keys.
+      num_regions (int): Number of regions to form.
+      cardinalities (List[int]): Target cardinalities for each region (must sum to the total number of areas).
+      max_solution_attempts (int, optional): Maximum attempts to find a valid partition.
 
     Returns:
-        List[Set[int]]: List of regions (each a set of area IDs).
+      List[Set[int]]: A list of regions (each a set of area IDs).
 
-    This implementation ensures that the available areas are updated only once per region.
-    The growing step (grow_region) now returns a region without modifying available_areas.
-    The run_prrp function then removes the finalized region from the available areas.
+    Raises:
+      ValueError: if num_regions does not match the length of cardinalities.
+      RuntimeError: if a valid solution cannot be generated within max_solution_attempts.
     """
     if num_regions != len(cardinalities):
         raise ValueError(
             "Number of regions must match the length of the cardinalities list.")
 
-    # Construct the spatial adjacency list.
+    from src.utils import construct_adjacency_list  # Ensure proper import
+
+    # Build the spatial adjacency list and ensure neighbor lists are sets.
     adj_list = construct_adjacency_list(areas)
-    # Ensure all neighbor lists are sets.
     adj_list = {k: set(v) for k, v in adj_list.items()}
-    available_areas = set(adj_list.keys())
+    original_available = set(adj_list.keys())
 
-    # Sort cardinalities in descending order.
+    # Sort cardinalities in descending order for greater flexibility.
     cardinalities.sort(reverse=True)
-    regions = []
 
-    for target_cardinality in cardinalities:
-        logger.info(f"Growing region with target size: {target_cardinality}")
+    # Initialize a seed queue for gapless seed selection.
+    seed_queue: Set[int] = set()
+
+    for attempt in range(max_solution_attempts):
+        logger.info(f"Solution attempt {attempt + 1}/{max_solution_attempts}")
+        available_areas = original_available.copy()
+        regions = []
+        seed_queue.clear()
+
         try:
-            # Grow the region; note that grow_region no longer updates available_areas.
-            region = grow_region(adj_list, available_areas, target_cardinality)
-            # Remove the grown region from available_areas immediately.
-            available_areas.difference_update(region)
-            # If there are any available areas left, adjust the region for connectivity.
-            if available_areas:
-                merged_region = merge_disconnected_areas(
-                    adj_list, available_areas.copy(), region)
-                final_region = split_region(
-                    merged_region, target_cardinality, adj_list)
-            else:
-                final_region = region
-            # Update the global available areas based on the final region.
-            available_areas.difference_update(final_region)
-            regions.append(final_region)
-            logger.info(f"Region finalized with {len(final_region)} areas.")
-        except Exception as e:
-            logger.error(f"Failed to generate region: {e}")
-            return []  # Return an empty result indicating failure
+            # Grow regions one by one.
+            for idx, target_cardinality in enumerate(cardinalities):
+                logger.info(
+                    f"Growing region {idx+1} with target size: {target_cardinality}")
+                if idx == 0 or not seed_queue:
+                    initial_seed = None
+                else:
+                    valid_seeds = list(
+                        seed_queue.intersection(available_areas))
+                    initial_seed = random.choice(
+                        valid_seeds) if valid_seeds else None
+                    if initial_seed is not None:
+                        seed_queue.remove(initial_seed)
+                        logger.info(
+                            f"Selected seed {initial_seed} from seed queue for region {idx+1}.")
 
-    return regions
+                region = grow_region(
+                    adj_list, available_areas, target_cardinality, initial_seed=initial_seed)
+                available_areas.difference_update(region)
+                logger.info(f"Region {idx+1} grown with {len(region)} areas.")
+
+                # Update seed queue with neighbors of the newly grown region that are still available.
+                for area in region:
+                    for neighbor in adj_list.get(area, set()):
+                        if neighbor in available_areas:
+                            seed_queue.add(neighbor)
+
+                regions.append(region)
+                logger.info(
+                    f"Region {idx+1} finalized with {len(region)} areas.")
+
+            # Validate that all areas are assigned.
+            if set().union(*regions) == original_available and len(regions) == num_regions:
+                logger.info("Successfully generated a valid solution.")
+                return regions
+            else:
+                raise RuntimeError(
+                    "Partitioning incomplete: not all areas were assigned.")
+        except Exception as e:
+            logger.warning(f"Solution attempt {attempt + 1} failed: {e}")
+            continue
+
+    raise RuntimeError(
+        "Failed to generate a valid solution after maximum attempts.")
 
 
 def _prrp_worker(seed_value: int,
@@ -485,17 +468,7 @@ def _prrp_worker(seed_value: int,
                  num_regions: int,
                  cardinalities: List[int]) -> List[Set[int]]:
     """
-    Worker function for parallel PRRP execution. Sets a unique random seed
-    for statistical independence, executes one full PRRP solution, and returns it.
-
-    Parameters:
-        seed_value (int): The random seed for this worker.
-        areas (List[Dict[str, Any]]): List of spatial areas.
-        num_regions (int): The number of regions to create.
-        cardinalities (List[int]): Target sizes for regions.
-
-    Returns:
-        List[Set[int]]: A single PRRP solution.
+    Worker function for parallel PRRP execution.
     """
     random.seed(seed_value)
     logger.info(f"Worker started with seed {seed_value}.")
@@ -518,26 +491,13 @@ def run_parallel_prrp(areas: List[Dict[str, Any]],
                       use_multiprocessing: bool = True) -> List[List[Set[int]]]:
     """
     Executes multiple PRRP solutions in parallel.
-
-    Parameters:
-        areas (List[Dict[str, Any]]): Spatial areas.
-        num_regions (int): Regions to create per solution.
-        cardinalities (List[int]): Target sizes for regions.
-        solutions_count (int): Number of solutions to generate.
-        num_threads (int): Number of parallel threads/processes.
-        use_multiprocessing (bool): Whether to use multiprocessing.
-
-    Returns:
-        List[List[Set[int]]]: List of PRRP solutions.
     """
     if num_threads is None:
         num_threads = min(solutions_count, cpu_count())
     logger.info(
         f"Generating {solutions_count} PRRP solutions using {num_threads} workers.")
-
     seeds = [random.randint(0, 2**31 - 1) for _ in range(solutions_count)]
     logger.info(f"Generated seeds: {seeds}")
-
     solutions = []
     if use_multiprocessing:
         logger.info("Starting parallel execution using multiprocessing.")
@@ -552,7 +512,6 @@ def run_parallel_prrp(areas: List[Dict[str, Any]],
             solutions.append(_prrp_worker(
                 seed, areas, num_regions, cardinalities))
         logger.info("Sequential PRRP execution completed.")
-
     return solutions
 
 
@@ -560,25 +519,20 @@ def run_parallel_prrp(areas: List[Dict[str, Any]],
 # 8. Main Execution Block (for testing)
 # ==============================
 if __name__ == "__main__":
-    # Get absolute path to the shapefile.
     shapefile_path = os.path.abspath(os.path.join(
         os.getcwd(), 'data/cb_2015_42_tract_500k/cb_2015_42_tract_500k.shp'))
     print(f"Path to shape file: {shapefile_path}")
-
     sample_areas = load_shapefile(shapefile_path)
     if sample_areas is None:
         logger.error("Failed to load areas from shapefile.")
         exit(1)
-
     num_regions = 5
     total_areas = len(sample_areas)
     cardinalities = [random.randint(5, 15) for _ in range(num_regions - 1)]
     cardinalities.append(total_areas - sum(cardinalities))
-
     logger.info("Running a single PRRP solution...")
     single_solution = run_prrp(sample_areas, num_regions, cardinalities)
     logger.info(f"Single PRRP solution: {single_solution}")
-
     logger.info("Running parallel PRRP solutions...")
     parallel_solutions = run_parallel_prrp(
         sample_areas, num_regions, cardinalities, solutions_count=3, num_threads=2, use_multiprocessing=True)
