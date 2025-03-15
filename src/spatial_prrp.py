@@ -103,12 +103,15 @@ def expand_region_randomly(
         or an empty set if unsuccessful.
     """
     for attempt in range(max_attempts):
-        # Work on a temporary copy of available nodes for this attempt.
         temp_avail = avail.copy()
         region_nodes = set()
 
-        # Always pick a new random seed from the available nodes
-        seed_node = random.choice(list(temp_avail))
+        # Choose the seed from the largest connected component of temp_avail.
+        components = list(nx.connected_components(net.subgraph(temp_avail)))
+        if not components:
+            return set()
+        largest_comp = max(components, key=len)
+        seed_node = random.choice(list(largest_comp))
         region_nodes.add(seed_node)
         temp_avail.remove(seed_node)
 
@@ -120,10 +123,10 @@ def expand_region_randomly(
             candidate = random.choice(list(frontier))
             region_nodes.add(candidate)
             temp_avail.remove(candidate)
-            # Update the frontier: remove the candidate and add its unassigned neighbors.
             frontier.discard(candidate)
             frontier.update(set(net.neighbors(candidate)
                                 ).intersection(temp_avail))
+
         if len(region_nodes) == target_size:
             # On success, update the available set.
             avail.intersection_update(temp_avail)
@@ -133,6 +136,7 @@ def expand_region_randomly(
         else:
             logger.info(
                 f"Region growth attempt {attempt + 1} failed to reach target size {target_size}. Retrying...")
+
     return set()
 
 
@@ -253,8 +257,8 @@ def run_prrp(
     seed_pool = set()  # A pool of candidate seeds from adjacent areas
 
     for idx, target in enumerate(cardinality_list):
-        # Feasibility check: the largest connected component among available nodes
-        # must have at least 'target' nodes.
+        # Feasibility check remains (it checks that the largest connected
+        # component in available_nodes is at least as large as target).
         comp_sizes = [len(c) for c in nx.connected_components(
             net.subgraph(available_nodes))]
         if not comp_sizes or max(comp_sizes) < target:
@@ -262,18 +266,26 @@ def run_prrp(
             logger.error(error_msg)
             raise RuntimeError(error_msg)
 
-        # Select a seed: if seed_pool is nonempty, choose from it; otherwise, choose randomly.
+        # Use seed_pool if available; otherwise, choose seed from the largest connected component.
         if seed_pool:
             candidate_seeds = seed_pool.intersection(available_nodes)
-            seed = random.choice(list(candidate_seeds)) if candidate_seeds else random.choice(
-                list(available_nodes))
+            if candidate_seeds:
+                seed = random.choice(list(candidate_seeds))
+            else:
+                components = list(nx.connected_components(
+                    net.subgraph(available_nodes)))
+                largest_comp = max(components, key=len)
+                seed = random.choice(list(largest_comp))
             seed_pool.discard(seed)
         else:
-            seed = random.choice(list(available_nodes))
+            components = list(nx.connected_components(
+                net.subgraph(available_nodes)))
+            largest_comp = max(components, key=len)
+            seed = random.choice(list(largest_comp))
+
         logger.info(
             f"Growing region {idx + 1} with target size {target} using seed {seed}.")
 
-        # Grow region with random frontier expansion.
         region = expand_region_randomly(
             net, available_nodes, target, seed, max_attempts=max_region_attempts)
         if not region or len(region) != target:
@@ -284,10 +296,10 @@ def run_prrp(
         # Merge any disconnected available components into the region.
         region = integrate_components(net, available_nodes, region)
 
-        # Adjust (split/restore) the region to exactly meet the target.
+        # Adjust the region to exactly meet the target cardinality.
         region = adjust_region_size(net, region, target, available_nodes)
 
-        # Remove the region’s nodes from the available set.
+        # Remove the region’s nodes from available_nodes.
         available_nodes.difference_update(region)
         regions.append(region)
         logger.info(f"Region {idx + 1} finalized with {len(region)} nodes.")
@@ -303,6 +315,7 @@ def run_prrp(
         logger.error(error_msg)
         raise RuntimeError(error_msg)
     logger.info("Successfully generated all regions.")
+
     return regions
 
 
