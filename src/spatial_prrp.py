@@ -257,31 +257,35 @@ def run_prrp(
     seed_pool = set()  # A pool of candidate seeds from adjacent areas
 
     for idx, target in enumerate(cardinality_list):
-        # Feasibility check remains (it checks that the largest connected
-        # component in available_nodes is at least as large as target).
-        comp_sizes = [len(c) for c in nx.connected_components(
-            net.subgraph(available_nodes))]
-        if not comp_sizes or max(comp_sizes) < target:
-            error_msg = f"Feasibility check failed for target {target}. Largest component has {max(comp_sizes) if comp_sizes else 0} nodes."
+        # Feasibility check: the largest connected component in available_nodes must have at least 'target' nodes.
+        components = list(nx.connected_components(
+            net.subgraph(available_nodes)))
+        if not components or max(len(c) for c in components) < target:
+            error_msg = f"Feasibility check failed for target {target}. Largest component has {max(len(c) for c in components) if components else 0} nodes."
             logger.error(error_msg)
             raise RuntimeError(error_msg)
 
-        # Use seed_pool if available; otherwise, choose seed from the largest connected component.
-        if seed_pool:
-            candidate_seeds = seed_pool.intersection(available_nodes)
-            if candidate_seeds:
-                seed = random.choice(list(candidate_seeds))
-            else:
-                components = list(nx.connected_components(
-                    net.subgraph(available_nodes)))
-                largest_comp = max(components, key=len)
-                seed = random.choice(list(largest_comp))
-            seed_pool.discard(seed)
+        # Determine valid candidate seeds: those in available_nodes that belong to a component large enough.
+        comp_dict = {}  # Map each node to its component (as a set)
+        for comp in components:
+            if len(comp) >= target:
+                for node in comp:
+                    comp_dict[node] = comp
+
+        candidate_seeds = seed_pool.intersection(available_nodes)
+        valid_candidates = {s for s in candidate_seeds if s in comp_dict}
+        if valid_candidates:
+            seed = random.choice(list(valid_candidates))
         else:
-            components = list(nx.connected_components(
-                net.subgraph(available_nodes)))
-            largest_comp = max(components, key=len)
+            # Fallback: choose a seed from the largest connected component among those with size >= target.
+            valid_comps = [comp for comp in components if len(comp) >= target]
+            if not valid_comps:
+                error_msg = f"No contiguous component is large enough for target {target}."
+                logger.error(error_msg)
+                raise RuntimeError(error_msg)
+            largest_comp = max(valid_comps, key=len)
             seed = random.choice(list(largest_comp))
+        seed_pool.discard(seed)
 
         logger.info(
             f"Growing region {idx + 1} with target size {target} using seed {seed}.")
@@ -295,21 +299,17 @@ def run_prrp(
 
         # Merge any disconnected available components into the region.
         region = integrate_components(net, available_nodes, region)
-
         # Adjust the region to exactly meet the target cardinality.
         region = adjust_region_size(net, region, target, available_nodes)
-
-        # Remove the region’s nodes from available_nodes.
         available_nodes.difference_update(region)
         regions.append(region)
         logger.info(f"Region {idx + 1} finalized with {len(region)} nodes.")
 
-        # Update seed pool with neighbors of the new region.
+        # Update the seed pool with neighbors of the new region.
         for n in region:
             seed_pool.update(
                 set(net.neighbors(n)).intersection(available_nodes))
 
-    # Final verification: all nodes should be assigned.
     if set().union(*regions) != all_nodes:
         error_msg = "Partitioning incomplete: not all nodes were assigned to a region."
         logger.error(error_msg)
