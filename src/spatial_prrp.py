@@ -62,26 +62,22 @@ def get_gapless_seed(adj_list: Dict[int, Set[int]],
         logger.error("No available areas to select a seed.")
         raise ValueError("No available areas to select a seed.")
 
-    # If no regions have yet been assigned, pick a seed at random.
     if not assigned_regions:
         seed = random.choice(list(available_areas))
         logger.info(f"First seed selected randomly: {seed}")
         return seed
 
-    # Compute candidate seeds as the unassigned neighbors of the already assigned areas.
     candidate_seeds = set()
     for area in assigned_regions:
-        # Only consider neighbors that are still available.
         candidate_seeds.update(adj_list.get(area, set()) & available_areas)
 
-    # If there are any candidate seeds from the border, choose one uniformly at random.
     if candidate_seeds:
         seed = random.choice(list(candidate_seeds))
         logger.info(
             f"Gapless seed selected from neighbors: {seed} (Candidates: {candidate_seeds})")
         return seed
 
-    # Otherwise, fall back to the original method:
+    # Fallback: use heap-based selection
     heap = []
     for area in available_areas:
         connectivity = sum(1 for nbr in adj_list.get(
@@ -103,29 +99,31 @@ def grow_region(adj_list: Dict[int, Set[int]],
                 initial_seed: Optional[int] = None) -> Set[int]:
     """
     Grows a spatially contiguous region until it reaches the target cardinality.
+    If an initial_seed is provided and is still available, it is used; otherwise, a seed is
+    selected using the gapless strategy. On retries, the initial seed is cleared so that a
+    new random seed is chosen.
 
     Parameters:
-      adj_list (Dict[int, Set[int]]): The spatial adjacency graph.
-      available_areas (Set[int]): Set of area IDs that have not yet been assigned.
-      target_cardinality (int): Desired number of areas in the region.
-      max_retries (int, optional): Maximum number of attempts if region growth fails.
-      initial_seed (Optional[int], optional): If provided and available, used as the starting seed.
+      - adj_list: The spatial adjacency graph.
+      - available_areas: Set of area IDs not yet assigned.
+      - target_cardinality: Desired number of areas in the region.
+      - max_retries: Maximum attempts if the region does not reach target cardinality.
+      - initial_seed: Optional seed area ID to start region growing.
 
     Returns:
-      Set[int]: The grown region.
+      A set of area IDs forming the region.
 
     Raises:
-      ValueError: if target_cardinality exceeds the number of available areas.
-      RuntimeError: if a region meeting the target is not grown after max_retries.
+      - ValueError: if target_cardinality exceeds the number of available areas.
+      - RuntimeError: if a valid region is not grown after max_retries attempts.
     """
     if target_cardinality == len(available_areas):
         logger.info(
-            f"Target cardinality {target_cardinality} equals the number of available areas; returning all available areas.")
+            f"Target cardinality {target_cardinality} equals available areas; returning all.")
         return available_areas.copy()
 
     if target_cardinality > len(available_areas):
-        error_msg = (f"Target cardinality ({target_cardinality}) exceeds the number of available areas "
-                     f"({len(available_areas)}).")
+        error_msg = f"Target cardinality ({target_cardinality}) exceeds available areas ({len(available_areas)})."
         logger.error(error_msg)
         raise ValueError(error_msg)
 
@@ -133,7 +131,7 @@ def grow_region(adj_list: Dict[int, Set[int]],
     while retries < max_retries:
         logger.info(f"Region growing attempt {retries + 1}/{max_retries}")
         temp_available = available_areas.copy()
-        # Use the provided seed if available; otherwise, select one randomly.
+
         if initial_seed is not None and initial_seed in temp_available:
             seed = initial_seed
             logger.info(f"Using provided seed: {seed}")
@@ -163,16 +161,15 @@ def grow_region(adj_list: Dict[int, Set[int]],
         while len(region) < target_cardinality:
             if not frontier_heap:
                 logger.debug(
-                    "Frontier is empty; unable to expand region further.")
+                    "Frontier is empty; cannot expand region further.")
                 break
-
             _, _, candidate = heapq.heappop(frontier_heap)
             if candidate not in temp_available:
                 continue
             region.add(candidate)
             temp_available.remove(candidate)
             logger.debug(
-                f"Added area {candidate} to region. Current region size: {len(region)}.")
+                f"Added area {candidate} to region (size now {len(region)}).")
             for neighbor in adj_list.get(candidate, set()):
                 if neighbor in temp_available:
                     score = len(adj_list.get(neighbor, set()
@@ -182,17 +179,17 @@ def grow_region(adj_list: Dict[int, Set[int]],
 
         if len(region) == target_cardinality:
             logger.info(
-                f"Successfully grown region with target cardinality {target_cardinality}: {region}")
+                f"Successfully grown region with target {target_cardinality}: {region}")
             return region
         else:
             retries += 1
             logger.warning(
-                f"Region growth attempt {retries} failed to reach the target cardinality. Retrying with a new seed.")
-            # Reset initial_seed for subsequent retries.
-            initial_seed = None
+                f"Attempt {retries} failed to reach target; retrying with new seed.")
+            initial_seed = None  # Clear provided seed on retry
 
     error_msg = f"Region growth failed after {max_retries} attempts."
     logger.error(error_msg)
+
     raise RuntimeError(error_msg)
 
 
@@ -375,39 +372,43 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int],
     Executes the full PRRP algorithm to partition the areas into 'num_regions' regions
     that satisfy the cardinality constraints while maintaining spatial contiguity.
 
-    The algorithm implements gapless seed selection:
+    Implements gapless seed selection via a seed queue:
       - The first region uses a random seed.
-      - For subsequent regions, a "seed queue" is maintained from the unassigned neighbors
-        of already grown regions. This helps to keep the unassigned areas contiguous.
+      - For subsequent regions, the seed is chosen from the unassigned neighbors of already
+        grown regions (the seed queue).
+
+    After growing each region, a merging phase is applied to merge any disconnected unassigned
+    components into the current region and then a splitting phase trims the region down to exactly
+    the target cardinality.
 
     Parameters:
-      areas (List[Dict]): List of areas, each with at least "id" and "geometry" keys.
-      num_regions (int): Number of regions to form.
-      cardinalities (List[int]): Target cardinalities for each region (must sum to the total number of areas).
-      max_solution_attempts (int, optional): Maximum attempts to find a valid partition.
+      - areas: List of area dicts with at least "id" and "geometry".
+      - num_regions: Number of regions to form.
+      - cardinalities: List of target cardinalities (must sum to total number of areas).
+      - max_solution_attempts: Maximum full solution attempts.
 
     Returns:
-      List[Set[int]]: A list of regions (each a set of area IDs).
+      A list of regions (each a set of area IDs).
 
     Raises:
-      ValueError: if num_regions does not match the length of cardinalities.
-      RuntimeError: if a valid solution cannot be generated within max_solution_attempts.
+      - ValueError: if num_regions does not match length of cardinalities.
+      - RuntimeError: if a valid solution cannot be generated.
     """
     if num_regions != len(cardinalities):
         raise ValueError(
-            "Number of regions must match the length of the cardinalities list.")
+            "Number of regions must match length of cardinalities list.")
 
-    from src.utils import construct_adjacency_list  # Ensure proper import
+    from src.utils import construct_adjacency_list  # Ensure import
 
-    # Build the spatial adjacency list and ensure neighbor lists are sets.
+    # Build adjacency list and ensure neighbor lists are sets.
     adj_list = construct_adjacency_list(areas)
     adj_list = {k: set(v) for k, v in adj_list.items()}
     original_available = set(adj_list.keys())
 
-    # Sort cardinalities in descending order for greater flexibility.
+    # Sort cardinalities in descending order.
     cardinalities.sort(reverse=True)
 
-    # Initialize a seed queue for gapless seed selection.
+    # Initialize seed queue for gapless seed selection.
     seed_queue: Set[int] = set()
 
     for attempt in range(max_solution_attempts):
@@ -417,7 +418,6 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int],
         seed_queue.clear()
 
         try:
-            # Grow regions one by one.
             for idx, target_cardinality in enumerate(cardinalities):
                 logger.info(
                     f"Growing region {idx+1} with target size: {target_cardinality}")
@@ -433,22 +433,29 @@ def run_prrp(areas: List[Dict], num_regions: int, cardinalities: List[int],
                         logger.info(
                             f"Selected seed {initial_seed} from seed queue for region {idx+1}.")
 
-                region = grow_region(
-                    adj_list, available_areas, target_cardinality, initial_seed=initial_seed)
-                available_areas.difference_update(region)
-                logger.info(f"Region {idx+1} grown with {len(region)} areas.")
+                # Grow the region.
+                region = grow_region(adj_list, available_areas, target_cardinality,
+                                     initial_seed=initial_seed)
+                # Merge disconnected available areas into the region.
+                if available_areas:
+                    merged_region = merge_disconnected_areas(
+                        adj_list, available_areas.copy(), region)
+                    final_region = split_region(
+                        merged_region, target_cardinality, adj_list)
+                else:
+                    final_region = region
 
-                # Update seed queue with neighbors of the newly grown region that are still available.
-                for area in region:
+                available_areas.difference_update(final_region)
+                logger.info(
+                    f"Region {idx+1} finalized with {len(final_region)} areas.")
+
+                # Update the seed queue with unassigned neighbors of this region.
+                for area in final_region:
                     for neighbor in adj_list.get(area, set()):
                         if neighbor in available_areas:
                             seed_queue.add(neighbor)
+                regions.append(final_region)
 
-                regions.append(region)
-                logger.info(
-                    f"Region {idx+1} finalized with {len(region)} areas.")
-
-            # Validate that all areas are assigned.
             if set().union(*regions) == original_available and len(regions) == num_regions:
                 logger.info("Successfully generated a valid solution.")
                 return regions
