@@ -286,9 +286,10 @@ def run_prrp(
                     raise RuntimeError(
                         f"Not enough available nodes for target {target}.")
 
-                # Build mapping for nodes in components that are large enough.
+                # Get all contiguous components of the unassigned nodes.
                 components = list(nx.connected_components(
                     net.subgraph(available_nodes)))
+                # Build a mapping for nodes in components that are large enough.
                 comp_dict = {}
                 for comp in components:
                     if len(comp) >= target:
@@ -302,14 +303,14 @@ def run_prrp(
                 if valid_candidates:
                     seed = random.choice(list(valid_candidates))
                 else:
-                    valid_comps = [
-                        comp for comp in components if len(comp) >= target]
-                    if not valid_comps:
+                    # Instead of requiring a contiguous component of size >= target,
+                    # pick the seed from the largest contiguous component among all available nodes.
+                    if components:
+                        largest_comp = max(components, key=len)
+                        seed = random.choice(list(largest_comp))
+                    else:
                         raise RuntimeError(
-                            f"No contiguous component is large enough for target {target}."
-                        )
-                    largest_comp = max(valid_comps, key=len)
-                    seed = random.choice(list(largest_comp))
+                            "No available component to select seed from.")
                 seed_pool.discard(seed)
 
                 logger.info(
