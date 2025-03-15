@@ -252,11 +252,11 @@ def run_prrp(
     of nodes in the graph. If a partitioning attempt fails due to feasibility issues,
     the algorithm restarts the entire region building process up to max_restarts times.
 
-    This version adds an extra “repair” step after each region is grown:
-    if the remaining unassigned areas (available_nodes) are fragmented into multiple 
-    connected components, all components except the largest are merged into the 
-    region that was just built (and then trimmed via adjust_region_size) so that 
-    the region exactly meets its target cardinality. If not, the iteration is aborted.
+    This version follows the PRRP framework from the paper by first growing a region
+    (using a gapless seed selection strategy), then merging disconnected available areas
+    (if the remaining unassigned areas are fragmented) and finally adjusting the region
+    to exactly meet its target cardinality. If after adjustment the region does not exactly
+    meet the target, the iteration is aborted.
 
     Parameters:
         net: The spatial network (NetworkX graph).
@@ -286,7 +286,7 @@ def run_prrp(
                 if not components or max(len(c) for c in components) < target:
                     raise RuntimeError(
                         f"Feasibility check failed for target {target}.")
-                # Build a mapping for nodes in components that are large enough.
+                # Build mapping for nodes in components that are large enough.
                 comp_dict = {}
                 for comp in components:
                     if len(comp) >= target:
@@ -318,6 +318,18 @@ def run_prrp(
                         f"Region growth failed for region {idx+1} (target {target}).")
                 # Merge any disconnected available components into the region.
                 region = integrate_components(net, available_nodes, region)
+                # --- Repair Step ---
+                # Check if available_nodes are fragmented; if so, merge all smaller components (all but the largest)
+                rem_comps = list(nx.connected_components(
+                    net.subgraph(available_nodes)))
+                if len(rem_comps) > 1:
+                    largest_rem = max(rem_comps, key=len)
+                    for comp in rem_comps:
+                        if comp != largest_rem:
+                            region.update(comp)
+                            available_nodes.difference_update(comp)
+                    logger.info(
+                        f"After repair merge, region {idx+1} size is {len(region)}.")
                 # Adjust the region so that it exactly meets the target.
                 region = adjust_region_size(
                     net, region, target, available_nodes)
@@ -329,26 +341,6 @@ def run_prrp(
                 regions.append(region)
                 logger.info(
                     f"Region {idx+1} finalized with {len(region)} nodes.")
-
-                # --- New Repair Step ---
-                # If available_nodes is fragmented, merge the smaller components into the current region.
-                rem_comps = list(nx.connected_components(
-                    net.subgraph(available_nodes)))
-                if len(rem_comps) > 1:
-                    largest_rem = max(rem_comps, key=len)
-                    for comp in rem_comps:
-                        if comp != largest_rem:
-                            region.update(comp)
-                            available_nodes.difference_update(comp)
-                    region = adjust_region_size(
-                        net, region, target, available_nodes)
-                    if len(region) != target:
-                        raise RuntimeError(
-                            f"After repair, region {idx+1} size {len(region)} != target {target}.")
-                    regions[-1] = region
-                    logger.info(
-                        f"After repair, Region {idx+1} adjusted to {len(region)} nodes; residual available_nodes now contiguous.")
-                # --- End Repair Step ---
 
                 # Update the seed pool with unassigned neighbors of the newly built region.
                 for n in region:
