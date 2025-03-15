@@ -12,7 +12,10 @@ This test suite covers:
   - Loading and processing of a real spatial dataset
   - Construction and PRRP execution on synthetic grid data
 
-Each test ensures that spatial contiguity and cardinality constraints are maintained.
+Note:
+For tests that use a real shapefile, it is assumed that the input areas are
+spatially contiguous. Therefore, if the shapefile contains many areas, we filter
+them to the largest connected component to ensure the algorithm can produce a valid solution.
 """
 
 import os
@@ -39,10 +42,11 @@ from src.prrp_data_loader import load_shapefile
 from shapely.geometry import box
 import geopandas as gpd
 
-
 # ==============================
 # Helper Functions for Test Data
 # ==============================
+
+
 def generate_test_graph() -> Dict[int, Set[int]]:
     """
     Generates a small, manually designed adjacency list representing spatial areas.
@@ -106,28 +110,42 @@ def generate_grid_test_data(rows: int, cols: int) -> Tuple[List[Dict[str, Any]],
     return areas, expected_adj_list
 
 
-def sample_real_dataset(areas: List[Dict[str, Any]], sample_size: int = 100) -> List[Dict[str, Any]]:
+def filter_to_largest_component(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Returns a representative subset of the dataset.
-    If the dataset is larger than 'sample_size', a random sample of that size is returned;
-    otherwise, the entire dataset is returned.
-    """
-    if len(areas) > sample_size:
-        return random.sample(areas, sample_size)
-    else:
-        return areas
+    Given a list of area dicts (each with 'id' and 'geometry'), constructs the adjacency list
+    and returns only the areas belonging to the largest spatially contiguous component.
 
+    This ensures that the input to the PRRP algorithm is a single contiguous set of areas,
+    as required by the algorithm.
+    """
+    # Construct adjacency list from the input areas.
+    adj_list = construct_adjacency_list(areas)
+    # Convert neighbor sets to lists for DFS in find_connected_components.
+    simple_adj = {k: list(v) for k, v in adj_list.items()}
+    # Get connected components.
+    components = find_connected_components(simple_adj)
+    if not components:
+        return areas
+    # Find the largest component.
+    largest_component_ids = max(components, key=len)
+    # Filter areas to only those whose 'id' is in the largest component.
+    filtered = [area for area in areas if area['id'] in largest_component_ids]
+    return filtered
 
 # ==============================
 # Test Suite
 # ==============================
+
+
 class TestSpatialPRRP(unittest.TestCase):
 
     def setUp(self):
         """
         Initializes test data before each test case.
         Creates a synthetic spatial graph and a dummy list of areas.
+        Also sets a fixed random seed for reproducibility.
         """
+        random.seed(42)  # Fix the seed for reproducibility in tests.
         self.adj_list: Dict[int, Set[int]] = generate_test_graph()
         self.available_areas: Set[int] = set(self.adj_list.keys())
         self.areas: List[Dict[str, Any]] = generate_test_areas()
@@ -209,7 +227,8 @@ class TestSpatialPRRP(unittest.TestCase):
     def test_run_parallel_prrp(self):
         solutions_count = 3
         parallel_solutions = run_parallel_prrp(
-            self.areas, self.num_regions, self.cardinalities, solutions_count=solutions_count, num_threads=2)
+            self.areas, self.num_regions, self.cardinalities,
+            solutions_count=solutions_count, num_threads=2)
         self.assertEqual(len(parallel_solutions), solutions_count)
         expected_areas = set(range(1, 13))
         for solution in parallel_solutions:
@@ -228,7 +247,7 @@ class TestSpatialPRRP(unittest.TestCase):
             run_prrp(self.areas, num_regions=4, cardinalities=[5, 5, 5])
 
     # ==============================
-    # New Tests: Real Dataset Integration (Using Subset)
+    # New Tests: Real Dataset Integration (Using Contiguous Subset)
     # ==============================
     def test_load_shapefile(self):
         shapefile_path = os.path.abspath(os.path.join(
@@ -251,10 +270,12 @@ class TestSpatialPRRP(unittest.TestCase):
         if not os.path.exists(shapefile_path):
             self.skipTest(f"Shapefile not found at {shapefile_path}")
         areas = load_shapefile(shapefile_path)
-        # Use a representative subset to keep test run times short.
-        areas = areas if len(areas) < 100 else random.sample(areas, 50)
+        # Instead of a random sample (which may break contiguity),
+        # filter the areas to the largest connected component.
+        areas = filter_to_largest_component(areas)
         total_areas = len(areas)
         num_regions = 5
+        # Generate cardinalities that sum to total_areas.
         cardinalities = [random.randint(5, 15) for _ in range(num_regions - 1)]
         cardinalities.append(total_areas - sum(cardinalities))
         regions = run_prrp(areas, num_regions, cardinalities)
@@ -269,15 +290,16 @@ class TestSpatialPRRP(unittest.TestCase):
         if not os.path.exists(shapefile_path):
             self.skipTest(f"Shapefile not found at {shapefile_path}")
         areas = load_shapefile(shapefile_path)
-        # Use a representative subset to keep test run times short.
-        areas = areas if len(areas) < 100 else random.sample(areas, 50)
+        # Filter to the largest contiguous set of areas.
+        areas = filter_to_largest_component(areas)
         total_areas = len(areas)
         num_regions = 5
         cardinalities = [random.randint(5, 15) for _ in range(num_regions - 1)]
         cardinalities.append(total_areas - sum(cardinalities))
         solutions_count = 3
         parallel_solutions = run_parallel_prrp(
-            areas, num_regions, cardinalities, solutions_count=solutions_count, num_threads=2)
+            areas, num_regions, cardinalities,
+            solutions_count=solutions_count, num_threads=2)
         self.assertEqual(len(parallel_solutions), solutions_count)
         expected_ids = {area['id'] for area in areas}
         for solution in parallel_solutions:
