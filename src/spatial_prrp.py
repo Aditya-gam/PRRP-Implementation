@@ -106,9 +106,9 @@ def expand_region_randomly(
         # Work on a temporary copy of available nodes for this attempt.
         temp_avail = avail.copy()
         region_nodes = set()
-        if seed_node not in temp_avail:
-            # If provided seed is no longer available, pick one randomly.
-            seed_node = random.choice(list(temp_avail))
+
+        # Always pick a new random seed from the available nodes
+        seed_node = random.choice(list(temp_avail))
         region_nodes.add(seed_node)
         temp_avail.remove(seed_node)
 
