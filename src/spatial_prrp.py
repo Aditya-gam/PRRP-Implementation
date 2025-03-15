@@ -279,14 +279,16 @@ def run_prrp(
             seed_pool = set()  # Candidate seeds from neighbors of previously built regions
 
             for idx, target in enumerate(cardinality_list):
-                # Feasibility check: the largest connected component in available_nodes
-                # must have at least 'target' nodes.
+                # --- Modified Feasibility Check ---
+                # Instead of checking the largest connected component,
+                # we only require that the total number of available nodes is at least 'target'.
+                if len(available_nodes) < target:
+                    raise RuntimeError(
+                        f"Not enough available nodes for target {target}.")
+
+                # Build mapping for nodes in components that are large enough.
                 components = list(nx.connected_components(
                     net.subgraph(available_nodes)))
-                if not components or max(len(c) for c in components) < target:
-                    raise RuntimeError(
-                        f"Feasibility check failed for target {target}.")
-                # Build mapping for nodes in components that are large enough.
                 comp_dict = {}
                 for comp in components:
                     if len(comp) >= target:
@@ -304,22 +306,25 @@ def run_prrp(
                         comp for comp in components if len(comp) >= target]
                     if not valid_comps:
                         raise RuntimeError(
-                            f"No contiguous component is large enough for target {target}.")
+                            f"No contiguous component is large enough for target {target}."
+                        )
                     largest_comp = max(valid_comps, key=len)
                     seed = random.choice(list(largest_comp))
                 seed_pool.discard(seed)
 
                 logger.info(
-                    f"Growing region {idx+1} with target size {target} using seed {seed}.")
-                region = expand_region_randomly(
-                    net, available_nodes, target, seed, max_attempts=max_region_attempts)
+                    f"Growing region {idx+1} with target size {target} using seed {seed}."
+                )
+                region = expand_region_randomly(net, available_nodes, target, seed,
+                                                max_attempts=max_region_attempts)
                 if not region or len(region) != target:
                     raise RuntimeError(
-                        f"Region growth failed for region {idx+1} (target {target}).")
+                        f"Region growth failed for region {idx+1} (target {target})."
+                    )
                 # Merge any disconnected available components into the region.
                 region = integrate_components(net, available_nodes, region)
                 # --- Repair Step ---
-                # Check if available_nodes are fragmented; if so, merge all smaller components (all but the largest)
+                # If available_nodes are fragmented, merge all smaller components (all but the largest)
                 rem_comps = list(nx.connected_components(
                     net.subgraph(available_nodes)))
                 if len(rem_comps) > 1:
@@ -329,18 +334,21 @@ def run_prrp(
                             region.update(comp)
                             available_nodes.difference_update(comp)
                     logger.info(
-                        f"After repair merge, region {idx+1} size is {len(region)}.")
+                        f"After repair merge, region {idx+1} size is {len(region)}."
+                    )
                 # Adjust the region so that it exactly meets the target.
                 region = adjust_region_size(
                     net, region, target, available_nodes)
                 if len(region) != target:
                     raise RuntimeError(
-                        f"After adjustment, region {idx+1} size {len(region)} != target {target}.")
+                        f"After adjustment, region {idx+1} size {len(region)} != target {target}."
+                    )
                 # Remove the region's nodes from available_nodes.
                 available_nodes.difference_update(region)
                 regions.append(region)
                 logger.info(
-                    f"Region {idx+1} finalized with {len(region)} nodes.")
+                    f"Region {idx+1} finalized with {len(region)} nodes."
+                )
 
                 # Update the seed pool with unassigned neighbors of the newly built region.
                 for n in region:
