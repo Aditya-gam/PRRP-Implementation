@@ -193,8 +193,9 @@ def adjust_region_size(
 ) -> Set[int]:
     """
     Adjusts the region to exactly meet the target size. If the region exceeds the target,
-    boundary nodes are removed at random (with connectivity re‐assessment). If the region
-    becomes too small, adjacent available nodes are added.
+    boundary nodes are removed with connectivity preservation: if removal disconnects the
+    region, only the smallest disconnected component (excess) is removed and added back to avail.
+    If the region falls below the target, adjacent available nodes are added.
 
     Parameters:
         net: The spatial network.
@@ -205,35 +206,41 @@ def adjust_region_size(
     Returns:
         A set of node IDs representing the adjusted region.
     """
-    # Function to compute boundary nodes (nodes in region with neighbor outside region)
     def boundary_nodes(region: Set[int]) -> Set[int]:
         return {n for n in region if set(net.neighbors(n)) - region}
 
-    # If the region is larger than target, remove boundary nodes.
+    # Region Shrinking Phase: remove nodes until region meets the target size
     while len(region_nodes) > target_size:
         b_nodes = boundary_nodes(region_nodes)
         if not b_nodes:
-            break
-        rem_node = random.choice(list(b_nodes))
-        region_nodes.remove(rem_node)
-        # Optionally, add the removed node back to available.
-        avail.add(rem_node)
-        # Reassess connectivity – keep only the largest connected part.
-        comps = list(nx.connected_components(net.subgraph(region_nodes)))
-        if comps:
-            region_nodes = max(comps, key=len)
-    # If the region falls below target, try to add adjacent nodes from avail.
+            break  # Cannot remove any further nodes
+        candidate = random.choice(list(b_nodes))
+        # Tentatively remove the candidate and check connectivity
+        temp_region = region_nodes - {candidate}
+        comps = list(nx.connected_components(net.subgraph(temp_region)))
+        if len(comps) > 1:
+            # If removal splits the region, remove the smallest disconnected component instead
+            smallest_comp = min(comps, key=len)
+            region_nodes -= smallest_comp
+            avail.update(smallest_comp)
+        else:
+            region_nodes.remove(candidate)
+            avail.add(candidate)
+
+    # Region Expansion Phase: add nodes if region is too small
     while len(region_nodes) < target_size:
         candidates = set()
         for n in region_nodes:
             candidates.update(set(net.neighbors(n)).intersection(avail))
         if not candidates:
-            break
+            break  # No available neighbor to add
         add_node = random.choice(list(candidates))
         region_nodes.add(add_node)
         avail.remove(add_node)
+
     logger.info(
         f"Region size adjusted to {len(region_nodes)} (target was {target_size}).")
+
     return region_nodes
 
 
