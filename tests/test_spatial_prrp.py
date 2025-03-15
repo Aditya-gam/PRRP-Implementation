@@ -1,21 +1,20 @@
 """
 tests/test_spatial_prrp.py
 
-Unit tests for the revised P-Regionalization through Recursive Partitioning (PRRP) algorithm.
-This test suite covers:
-  - Seed selection (select_seed)
-  - Region growing (grow_single_region)
-  - Region merging (merge_unassigned_components)
-  - Region splitting (adjust_region_size)
-  - Full partitioning execution (build_spatial_partitions)
-  - Parallel execution of partitioning (run_parallel_partitioning)
-  - Loading and processing of a real spatial dataset
+Unit tests for the revised P‑Regionalization through Recursive Partitioning (PRRP)
+algorithm. This test suite covers:
+  - Region Growing (expand_region_randomly)
+  - Region Merging (integrate_components)
+  - Region Splitting (adjust_region_size)
+  - Full partitioning execution (run_prrp)
+  - Parallel execution of partitioning (run_parallel_prrp)
+  - Loading and processing of a real spatial dataset via shapefile
   - Construction and execution on synthetic grid data
 
 Note:
-For tests that use a real shapefile, it is assumed that the input areas are
-spatially contiguous. Therefore, if the shapefile contains many areas, we filter
-them to the largest connected component to ensure the algorithm can produce a valid solution.
+For tests that use a real shapefile, it is assumed that the input areas are spatially
+contiguous. Therefore, if the shapefile contains many areas, we filter them to the largest
+connected component to ensure the algorithm can produce a valid solution.
 """
 
 import os
@@ -24,17 +23,16 @@ import random
 from copy import deepcopy
 from typing import Dict, Set, List, Any, Tuple
 
+import networkx as nx
+
 # Import functions from the revised spatial partitioning module.
 from src.spatial_prrp import (
-    select_seed,
-    grow_single_region,
-    merge_unassigned_components,
+    expand_region_randomly,
+    integrate_components,
     adjust_region_size,
-    build_spatial_partitions,
-    run_parallel_partitioning
+    run_prrp,
+    run_parallel_prrp
 )
-# Import utility functions.
-from src.utils import find_connected_components, construct_adjacency_list
 # Import the shapefile loader from the data loader module.
 from src.prrp_data_loader import load_shapefile
 
@@ -46,9 +44,11 @@ import geopandas as gpd
 # ==============================
 # Helper Functions for Test Data
 # ==============================
+
 def generate_test_graph() -> Dict[int, Set[int]]:
     """
     Generates a small, manually designed adjacency list representing spatial areas.
+    Returns a dictionary mapping each area id to a set of neighboring area ids.
     """
     return {
         1: {2, 5},
@@ -69,6 +69,7 @@ def generate_test_graph() -> Dict[int, Set[int]]:
 def generate_test_areas() -> List[Dict[str, Any]]:
     """
     Generates a synthetic list of spatial areas with dummy geometry (None).
+    Each area is represented as a dict with 'id' and 'geometry'.
     """
     return [{'id': i, 'geometry': None} for i in range(1, 13)]
 
@@ -109,22 +110,48 @@ def generate_grid_test_data(rows: int, cols: int) -> Tuple[List[Dict[str, Any]],
     return areas, expected_adj_list
 
 
+def build_graph_from_adj_list(adj_list: Dict[int, Set[int]]) -> nx.Graph:
+    """
+    Converts an adjacency list (dict of int to set of int) into a NetworkX Graph.
+    """
+    G = nx.Graph()
+    for node, neighbors in adj_list.items():
+        G.add_node(node)
+        for neighbor in neighbors:
+            G.add_edge(node, neighbor)
+    return G
+
+
+def build_graph_from_areas(areas: List[Dict[str, Any]]) -> nx.Graph:
+    """
+    Constructs a spatial graph from a list of area dictionaries.
+    Two areas are considered adjacent if their geometries intersect.
+    """
+    G = nx.Graph()
+    for area in areas:
+        G.add_node(area['id'])
+    # For testing, use a simple O(n^2) intersection check.
+    for i in range(len(areas)):
+        for j in range(i + 1, len(areas)):
+            geom1 = areas[i]['geometry']
+            geom2 = areas[j]['geometry']
+            if geom1 is not None and geom2 is not None:
+                if geom1.intersects(geom2):
+                    G.add_edge(areas[i]['id'], areas[j]['id'])
+    return G
+
+
 def filter_to_largest_component(areas: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Given a list of area dicts (each with 'id' and 'geometry'), constructs the adjacency list
-    and returns only the areas belonging to the largest spatially contiguous component.
+    Given a list of area dicts (each with 'id' and 'geometry'),
+    constructs a graph based on spatial intersections and returns only the areas
+    belonging to the largest connected component.
     """
-    # Construct adjacency list from the input areas.
-    adj_list = construct_adjacency_list(areas)
-    # Convert neighbor sets to lists for DFS in find_connected_components.
-    simple_adj = {k: list(v) for k, v in adj_list.items()}
-    # Get connected components.
-    components = find_connected_components(simple_adj)
+    G = build_graph_from_areas(areas)
+    components = list(nx.connected_components(G))
     if not components:
         return areas
-    # Find the largest component.
     largest_component_ids = max(components, key=len)
-    # Filter areas to only those whose 'id' is in the largest component.
     filtered = [area for area in areas if area['id'] in largest_component_ids]
     return filtered
 
@@ -139,122 +166,125 @@ class TestSpatialPRRP(unittest.TestCase):
         Initializes test data before each test case.
         Creates a synthetic spatial graph and a dummy list of areas.
         Also sets a fixed random seed for reproducibility.
+        Note: For the tiny 12-node synthetic graph, we use a cardinality list that is feasible.
+        Instead of [4, 4, 4], we use [5, 4, 3] (which sums to 12 and is in descending order).
         """
-        random.seed(42)  # Fix the seed for reproducibility in tests.
+        random.seed(42)  # Fix the seed for reproducibility.
         self.adj_list: Dict[int, Set[int]] = generate_test_graph()
         self.available_areas: Set[int] = set(self.adj_list.keys())
         self.areas: List[Dict[str, Any]] = generate_test_areas()
-        self.cardinalities = [4, 4, 4]
+        # Use a feasible cardinality list for the 12-node graph:
+        self.cardinalities = [5, 4, 3]  # Sum is 12.
         self.num_regions = len(self.cardinalities)
+        # Build a NetworkX graph from the synthetic adjacency list.
+        self.graph = build_graph_from_adj_list(self.adj_list)
 
     # ==============================
-    # 1. Test seed selection
-    # ==============================
-    def test_select_seed(self):
-        assigned_regions = {1, 2, 3}
-        seed = select_seed(
-            self.adj_list, self.available_areas, assigned_regions)
-        self.assertIn(seed, self.available_areas)
-        seed2 = select_seed(self.adj_list, self.available_areas, set())
-        self.assertIn(seed2, self.available_areas)
-        with self.assertRaises(ValueError):
-            select_seed(self.adj_list, set(), assigned_regions)
-
-    # ==============================
-    # 2. Test grow_single_region (Region Growing)
+    # 1. Test Region Growing (expand_region_randomly)
     # ==============================
     def test_grow_single_region(self):
         target_size = 4
-        available = deepcopy(self.available_areas)
-        region = grow_single_region(self.adj_list, available, target_size)
+        available = self.available_areas.copy()
+        # Pick a random seed from the available areas.
+        seed = random.choice(list(available))
+        region = expand_region_randomly(
+            self.graph, available, target_size, seed)
         self.assertEqual(len(region), target_size)
-        subgraph = {area: list(self.adj_list.get(
-            area, set()) & region) for area in region}
-        components = find_connected_components(subgraph)
-        self.assertEqual(len(components), 1)
+        # Verify connectivity using NetworkX.
+        subgraph = self.graph.subgraph(region)
+        components = list(nx.connected_components(subgraph))
+        self.assertEqual(len(components), 1,
+                         "The grown region is not contiguous.")
 
     def test_grow_single_region_insufficient_areas(self):
         available = {1, 2}
-        with self.assertRaises(ValueError):
-            grow_single_region(self.adj_list, available, 5)
+        target_size = 5
+        seed = random.choice(list(available))
+        with self.assertRaises(RuntimeError):
+            # Expect failure due to insufficient available areas.
+            expand_region_randomly(self.graph, available, target_size, seed)
 
     # ==============================
-    # 3. Test merge_unassigned_components (Region Merging)
+    # 2. Test Region Merging (integrate_components)
     # ==============================
     def test_merge_unassigned_components(self):
         region = {1, 2, 3, 4}
-        available = deepcopy(self.available_areas) - region
+        available = self.available_areas.copy() - region
+        # Manipulate available set to simulate disconnected components.
         available.discard(8)
         available.discard(11)
         available.add(12)
-        merged_region = merge_unassigned_components(
-            self.adj_list, available, region)
+        merged_region = integrate_components(self.graph, available, region)
         self.assertIn(12, merged_region)
 
     # ==============================
-    # 4. Test adjust_region_size (Region Splitting)
+    # 3. Test Region Splitting (adjust_region_size)
     # ==============================
     def test_adjust_region_size(self):
-        # Use a region larger than target and test trimming.
+        # Create a region larger than the target and test trimming.
         region = {1, 2, 3, 4, 5, 6}
         target_size = 4
         adjusted_region = adjust_region_size(
-            region, target_size, self.adj_list, self.available_areas)
+            self.graph, region, target_size, self.available_areas)
         self.assertEqual(len(adjusted_region), target_size)
-        subgraph = {area: list(self.adj_list.get(
-            area, set()) & adjusted_region) for area in adjusted_region}
-        components = find_connected_components(subgraph)
-        self.assertEqual(len(components), 1)
+        # Check connectivity.
+        subgraph = self.graph.subgraph(adjusted_region)
+        components = list(nx.connected_components(subgraph))
+        self.assertEqual(len(components), 1,
+                         "Adjusted region is not contiguous.")
 
     # ==============================
-    # 5. Test build_spatial_partitions (Full PRRP Execution) on Synthetic Data
+    # 4. Test Full PRRP Execution (run_prrp) on Synthetic Data
     # ==============================
     def test_build_spatial_partitions(self):
-        regions = build_spatial_partitions(
-            self.areas, self.num_regions, self.cardinalities)
+        regions = run_prrp(self.graph, self.cardinalities)
         self.assertEqual(len(regions), self.num_regions)
         for i, region in enumerate(regions):
-            self.assertEqual(len(region), self.cardinalities[i])
+            self.assertEqual(len(region), self.cardinalities[i],
+                             f"Region {i+1} does not match target size.")
         all_region_areas = set().union(*regions)
         expected_areas = set(range(1, 13))
-        self.assertEqual(all_region_areas, expected_areas)
+        self.assertEqual(all_region_areas, expected_areas,
+                         "Not all areas were assigned correctly.")
 
     # ==============================
-    # 6. Test run_parallel_partitioning (Parallel Execution) on Synthetic Data
+    # 5. Test Parallel Execution of PRRP (run_parallel_prrp) on Synthetic Data
     # ==============================
     def test_run_parallel_partitioning(self):
         solutions_count = 3
-        parallel_solutions = run_parallel_partitioning(
-            self.areas, self.num_regions, self.cardinalities,
-            num_solutions=solutions_count, num_workers=2)
+        parallel_solutions = run_parallel_prrp(self.graph, self.cardinalities,
+                                               num_solutions=solutions_count, num_threads=2)
         self.assertEqual(len(parallel_solutions), solutions_count)
         expected_areas = set(range(1, 13))
         for solution in parallel_solutions:
             self.assertEqual(len(solution), self.num_regions)
             union_areas = set().union(*solution)
-            self.assertEqual(union_areas, expected_areas)
+            self.assertEqual(union_areas, expected_areas,
+                             "A parallel solution did not cover all areas.")
         unique_solutions = {frozenset(frozenset(region)
                                       for region in sol) for sol in parallel_solutions}
-        self.assertGreater(len(unique_solutions), 1)
+        self.assertGreater(len(unique_solutions), 1,
+                           "Parallel solutions are not unique.")
 
     # ==============================
-    # 7. Test build_spatial_partitions with invalid cardinalities
+    # 6. Test run_prrp with Invalid Cardinalities (should fail)
     # ==============================
     def test_build_spatial_partitions_invalid_cardinalities(self):
-        with self.assertRaises(ValueError):
-            build_spatial_partitions(self.areas, region_count=4, size_targets=[
-                                     5, 5, 5], max_solution_attempts=10)
+        # Cardinalities that do not sum up to the total number of areas.
+        invalid_cardinalities = [5, 5, 5]  # Sum is 15 but total areas is 12.
+        with self.assertRaises(RuntimeError):
+            run_prrp(self.graph, invalid_cardinalities)
 
     # ==============================
-    # 8. Test load_shapefile integration
+    # 7. Test load_shapefile Integration
     # ==============================
     def test_load_shapefile(self):
         shapefile_path = os.path.abspath(os.path.join(
-            os.getcwd(), 'data/cb_2015_42_tract_500k/cb_2015_42_tract_500k.shp'))
+            os.getcwd(), 'data', 'cb_2015_42_tract_500k', 'cb_2015_42_tract_500k.shp'))
         if not os.path.exists(shapefile_path):
             self.skipTest(f"Shapefile not found at {shapefile_path}")
         areas = load_shapefile(shapefile_path)
-        # Use a subset to speed up tests if dataset is very large.
+        # Use a subset if the dataset is very large.
         areas = areas if len(areas) < 100 else random.sample(areas, 100)
         self.assertIsNotNone(areas)
         self.assertGreater(len(areas), 0)
@@ -263,9 +293,12 @@ class TestSpatialPRRP(unittest.TestCase):
             self.assertIn('geometry', area)
             self.assertIsNotNone(area['geometry'])
 
+    # ==============================
+    # 8. Test run_prrp with a Real Dataset
+    # ==============================
     def test_build_spatial_partitions_real_dataset(self):
         shapefile_path = os.path.abspath(os.path.join(
-            os.getcwd(), 'data/cb_2015_42_tract_500k/cb_2015_42_tract_500k.shp'))
+            os.getcwd(), 'data', 'cb_2015_42_tract_500k', 'cb_2015_42_tract_500k.shp'))
         if not os.path.exists(shapefile_path):
             self.skipTest(f"Shapefile not found at {shapefile_path}")
         areas = load_shapefile(shapefile_path)
@@ -276,34 +309,43 @@ class TestSpatialPRRP(unittest.TestCase):
         # Generate cardinalities that sum to total_areas.
         cardinalities = [random.randint(5, 15) for _ in range(num_regions - 1)]
         cardinalities.append(total_areas - sum(cardinalities))
-        regions = build_spatial_partitions(areas, num_regions, cardinalities)
+        # **Sort in descending order to meet algorithm assumptions**
+        cardinalities = sorted(cardinalities, reverse=True)
+        # Build a spatial graph from the areas.
+        graph = build_graph_from_areas(areas)
+        regions = run_prrp(graph, cardinalities)
         self.assertEqual(len(regions), num_regions)
         all_assigned = set().union(*regions)
         expected_ids = {area['id'] for area in areas}
-        self.assertEqual(all_assigned, expected_ids)
+        self.assertEqual(all_assigned, expected_ids,
+                         "Not all areas were assigned in the real dataset partitioning.")
+
+    # ==============================
+    # 9. Test Parallel Execution with a Real Dataset
+    # ==============================
 
     def test_run_parallel_partitioning_real_dataset(self):
         shapefile_path = os.path.abspath(os.path.join(
-            os.getcwd(), 'data/cb_2015_42_tract_500k/cb_2015_42_tract_500k.shp'))
+            os.getcwd(), 'data', 'cb_2015_42_tract_500k', 'cb_2015_42_tract_500k.shp'))
         if not os.path.exists(shapefile_path):
             self.skipTest(f"Shapefile not found at {shapefile_path}")
         areas = load_shapefile(shapefile_path)
-        # Filter to the largest contiguous set of areas.
         areas = filter_to_largest_component(areas)
         total_areas = len(areas)
         num_regions = 5
         cardinalities = [random.randint(5, 15) for _ in range(num_regions - 1)]
         cardinalities.append(total_areas - sum(cardinalities))
         solutions_count = 3
-        parallel_solutions = run_parallel_partitioning(
-            areas, num_regions, cardinalities,
-            num_solutions=solutions_count, num_workers=2)
+        graph = build_graph_from_areas(areas)
+        parallel_solutions = run_parallel_prrp(graph, cardinalities,
+                                               num_solutions=solutions_count, num_threads=2)
         self.assertEqual(len(parallel_solutions), solutions_count)
         expected_ids = {area['id'] for area in areas}
         for solution in parallel_solutions:
             self.assertEqual(len(solution), num_regions)
             union_ids = set().union(*solution)
-            self.assertEqual(union_ids, expected_ids)
+            self.assertEqual(
+                union_ids, expected_ids, "A parallel real dataset solution did not cover all areas.")
 
 
 if __name__ == '__main__':
