@@ -305,7 +305,7 @@ class TestSpatialPRRP(unittest.TestCase):
         # Filter areas to the largest connected component.
         areas = filter_to_largest_component(areas)
         total_areas = len(areas)
-        num_regions = 5
+        num_regions = max(1, int(0.01 * total_areas))
 
         # Instead of using random cardinalities that may be unbalanced,
         # compute an equal partition and adjust the last region.
