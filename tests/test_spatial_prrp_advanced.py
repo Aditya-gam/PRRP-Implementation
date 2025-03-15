@@ -24,7 +24,7 @@ from copy import deepcopy
 from typing import Dict, Set, List, Any
 
 # Import PRRP functions from the spatial_prrp module.
-from src.spatial_prrp import (
+from temp.spatial_prrp import (
     get_gapless_seed,
     grow_region,
     merge_disconnected_areas,

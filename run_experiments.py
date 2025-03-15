@@ -24,7 +24,7 @@ import logging
 from datetime import datetime
 
 # Import spatial PRRP functions and data loader
-from src.spatial_prrp import run_prrp as run_spatial_prrp, run_parallel_prrp
+from temp.spatial_prrp import run_prrp as run_spatial_prrp, run_parallel_prrp
 from src.prrp_data_loader import load_shapefile
 
 # Import graph PRRP functions and METIS parser
@@ -91,7 +91,7 @@ def run_spatial_experiment():
     start_time = time.time()
     try:
         solutions = run_spatial_prrp(
-            areas, num_regions, cardinalities, solutions_count=1)
+            areas, num_regions, cardinalities)
     except Exception as e:
         msg = f"Error during spatial PRRP execution: {e}"
         logger.error(msg)
