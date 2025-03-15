@@ -231,7 +231,7 @@ def adjust_region_size(
 def run_prrp(
     net: nx.Graph,
     cardinality_list: List[int],
-    max_region_attempts: int = 5
+    max_region_attempts: int = 20
 ) -> List[Set[int]]:
     """
     Executes the full PRRP algorithm to partition the spatial network into regions
