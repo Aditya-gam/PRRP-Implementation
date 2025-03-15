@@ -89,7 +89,8 @@ def expand_region_randomly(
 ) -> Set[int]:
     """
     Grows a contiguous region from a given seed using a random-based frontier update.
-    A feasibility check should be performed before calling this function.
+    This modified version respects the provided seed (if still available) to ensure
+    the gapless seed selection strategy described in the paper.
 
     Parameters:
         net: The spatial network (graph) where nodes represent areas.
@@ -99,23 +100,27 @@ def expand_region_randomly(
         max_attempts: Maximum attempts (restarts) allowed to reach the target size.
 
     Returns:
-        A set of node IDs that forms a region exactly of size target_size,
-        or an empty set if unsuccessful.
+        A set of node IDs that forms a region exactly of size target_size.
+
+    Raises:
+        RuntimeError: If no valid region of the target size can be grown after max_attempts.
     """
     for attempt in range(max_attempts):
         temp_avail = avail.copy()
         region_nodes = set()
-
-        # Choose the seed from the largest connected component of temp_avail.
-        components = list(nx.connected_components(net.subgraph(temp_avail)))
-        if not components:
-            return set()
-        largest_comp = max(components, key=len)
-        seed_node = random.choice(list(largest_comp))
+        # Use the provided seed if it is still available; otherwise, choose a new seed.
+        if seed_node not in temp_avail:
+            components = list(nx.connected_components(
+                net.subgraph(temp_avail)))
+            if not components:
+                raise RuntimeError(
+                    "No available component to select seed from.")
+            largest_comp = max(components, key=len)
+            seed_node = random.choice(list(largest_comp))
         region_nodes.add(seed_node)
         temp_avail.remove(seed_node)
 
-        # Initialize the frontier as the unassigned neighbors of the seed.
+        # Initialize the frontier with the unassigned neighbors of the seed.
         frontier = set(net.neighbors(seed_node)).intersection(temp_avail)
 
         # Grow the region until the target size is reached.
@@ -128,16 +133,19 @@ def expand_region_randomly(
                                 ).intersection(temp_avail))
 
         if len(region_nodes) == target_size:
-            # On success, update the available set.
             avail.intersection_update(temp_avail)
             logger.info(
-                f"Region grown to target size {target_size} on attempt {attempt + 1}.")
+                f"Region grown to target size {target_size} on attempt {attempt + 1}."
+            )
+
             return region_nodes
         else:
             logger.info(
-                f"Region growth attempt {attempt + 1} failed to reach target size {target_size}. Retrying...")
-
-    return set()
+                f"Region growth attempt {attempt + 1} failed to reach target size {target_size}. Retrying..."
+            )
+    raise RuntimeError(
+        f"Region growth failed: could not grow region of target size {target_size} after {max_attempts} attempts."
+    )
 
 
 # ------------------------------------------------------------------------------
