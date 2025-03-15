@@ -306,11 +306,15 @@ class TestSpatialPRRP(unittest.TestCase):
         areas = filter_to_largest_component(areas)
         total_areas = len(areas)
         num_regions = 5
-        # Generate cardinalities that sum to total_areas.
-        cardinalities = [random.randint(5, 15) for _ in range(num_regions - 1)]
-        cardinalities.append(total_areas - sum(cardinalities))
-        # **Sort in descending order to meet algorithm assumptions**
+
+        # Instead of using random cardinalities that may be unbalanced,
+        # compute an equal partition and adjust the last region.
+        base = total_areas // num_regions
+        cardinalities = [base] * num_regions
+        cardinalities[-1] += total_areas - sum(cardinalities)
+        # Ensure descending order (largest region first)
         cardinalities = sorted(cardinalities, reverse=True)
+
         # Build a spatial graph from the areas.
         graph = build_graph_from_areas(areas)
         regions = run_prrp(graph, cardinalities)
