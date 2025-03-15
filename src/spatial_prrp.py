@@ -235,88 +235,104 @@ def adjust_region_size(
 def run_prrp(
     net: nx.Graph,
     cardinality_list: List[int],
-    max_region_attempts: int = 20
+    max_region_attempts: int = 20,
+    max_restarts: int = 10
 ) -> List[Set[int]]:
     """
     Executes the full PRRP algorithm to partition the spatial network into regions
     with the specified cardinalities. The cardinality_list must sum to the total number
-    of nodes in the graph.
+    of nodes in the graph. If a partitioning attempt fails due to feasibility issues,
+    the algorithm restarts the entire region building process up to max_restarts times.
 
     Parameters:
-        net: The spatial network.
-        cardinality_list: A list of integers specifying the target size for each region.
-                          It is assumed that the list is sorted in descending order.
-        max_region_attempts: Maximum attempts for growing a region.
+        net: The spatial network (NetworkX graph).
+        cardinality_list: List of integers specifying target sizes for each region,
+                          assumed to be sorted in descending order.
+        max_region_attempts: Maximum attempts for growing each region.
+        max_restarts: Maximum number of full algorithm restarts if a solution is not found.
 
     Returns:
-        A list of regions, where each region is a set of node IDs.
+        A list of regions (each a set of node IDs) that partition the entire graph.
+
+    Raises:
+        RuntimeError: If a valid partitioning cannot be generated after max_restarts attempts.
     """
-    all_nodes = set(net.nodes())
-    available_nodes = all_nodes.copy()
-    regions = []
-    seed_pool = set()  # A pool of candidate seeds from adjacent areas
+    for restart in range(max_restarts):
+        try:
+            all_nodes = set(net.nodes())
+            available_nodes = all_nodes.copy()
+            regions = []
+            seed_pool = set()  # Candidate seeds from neighbors of previously built regions
 
-    for idx, target in enumerate(cardinality_list):
-        # Feasibility check: the largest connected component in available_nodes must have at least 'target' nodes.
-        components = list(nx.connected_components(
-            net.subgraph(available_nodes)))
-        if not components or max(len(c) for c in components) < target:
-            error_msg = f"Feasibility check failed for target {target}. Largest component has {max(len(c) for c in components) if components else 0} nodes."
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+            for idx, target in enumerate(cardinality_list):
+                # Check feasibility: the largest connected component among available_nodes must have at least 'target' nodes.
+                components = list(nx.connected_components(
+                    net.subgraph(available_nodes)))
+                if not components or max(len(c) for c in components) < target:
+                    raise RuntimeError(
+                        f"Feasibility check failed for target {target}. Largest component has {max(len(c) for c in components) if components else 0} nodes."
+                    )
+                # Build a mapping for nodes in components that are large enough.
+                comp_dict = {}
+                for comp in components:
+                    if len(comp) >= target:
+                        for node in comp:
+                            comp_dict[node] = comp
 
-        # Determine valid candidate seeds: those in available_nodes that belong to a component large enough.
-        comp_dict = {}  # Map each node to its component (as a set)
-        for comp in components:
-            if len(comp) >= target:
-                for node in comp:
-                    comp_dict[node] = comp
+                # Select a seed: try using a seed from the seed_pool first.
+                candidate_seeds = seed_pool.intersection(available_nodes)
+                valid_candidates = {
+                    s for s in candidate_seeds if s in comp_dict}
+                if valid_candidates:
+                    seed = random.choice(list(valid_candidates))
+                else:
+                    # Otherwise, choose from any connected component that is large enough.
+                    valid_comps = [
+                        comp for comp in components if len(comp) >= target]
+                    if not valid_comps:
+                        raise RuntimeError(
+                            f"No contiguous component is large enough for target {target}.")
+                    largest_comp = max(valid_comps, key=len)
+                    seed = random.choice(list(largest_comp))
+                seed_pool.discard(seed)
 
-        candidate_seeds = seed_pool.intersection(available_nodes)
-        valid_candidates = {s for s in candidate_seeds if s in comp_dict}
-        if valid_candidates:
-            seed = random.choice(list(valid_candidates))
-        else:
-            # Fallback: choose a seed from the largest connected component among those with size >= target.
-            valid_comps = [comp for comp in components if len(comp) >= target]
-            if not valid_comps:
-                error_msg = f"No contiguous component is large enough for target {target}."
-                logger.error(error_msg)
-                raise RuntimeError(error_msg)
-            largest_comp = max(valid_comps, key=len)
-            seed = random.choice(list(largest_comp))
-        seed_pool.discard(seed)
+                logger.info(
+                    f"Growing region {idx+1} with target size {target} using seed {seed}.")
+                # Grow the region using the random expansion function.
+                region = expand_region_randomly(
+                    net, available_nodes, target, seed, max_attempts=max_region_attempts)
+                if not region or len(region) != target:
+                    raise RuntimeError(
+                        f"Region growth failed for region {idx+1} (target {target}).")
+                # Merge disconnected available components into the region.
+                region = integrate_components(net, available_nodes, region)
+                # Adjust the region so that it exactly meets the target.
+                region = adjust_region_size(
+                    net, region, target, available_nodes)
+                available_nodes.difference_update(region)
+                regions.append(region)
+                logger.info(
+                    f"Region {idx+1} finalized with {len(region)} nodes.")
+                # Update the seed pool with unassigned neighbors of the newly built region.
+                for n in region:
+                    seed_pool.update(
+                        set(net.neighbors(n)).intersection(available_nodes))
 
-        logger.info(
-            f"Growing region {idx + 1} with target size {target} using seed {seed}.")
+            # Final check: all nodes should be assigned.
+            if set().union(*regions) != all_nodes:
+                raise RuntimeError(
+                    "Partitioning incomplete: not all nodes were assigned to a region.")
+            logger.info("Successfully generated all regions.")
 
-        region = expand_region_randomly(
-            net, available_nodes, target, seed, max_attempts=max_region_attempts)
-        if not region or len(region) != target:
-            error_msg = f"Region growth failed for region {idx + 1} (target {target})."
-            logger.error(error_msg)
-            raise RuntimeError(error_msg)
+            return regions
 
-        # Merge any disconnected available components into the region.
-        region = integrate_components(net, available_nodes, region)
-        # Adjust the region to exactly meet the target cardinality.
-        region = adjust_region_size(net, region, target, available_nodes)
-        available_nodes.difference_update(region)
-        regions.append(region)
-        logger.info(f"Region {idx + 1} finalized with {len(region)} nodes.")
+        except RuntimeError as e:
+            logger.info(
+                f"Restart attempt {restart+1} failed: {e}. Retrying...")
+            # Continue to the next restart iteration
 
-        # Update the seed pool with neighbors of the new region.
-        for n in region:
-            seed_pool.update(
-                set(net.neighbors(n)).intersection(available_nodes))
-
-    if set().union(*regions) != all_nodes:
-        error_msg = "Partitioning incomplete: not all nodes were assigned to a region."
-        logger.error(error_msg)
-        raise RuntimeError(error_msg)
-    logger.info("Successfully generated all regions.")
-
-    return regions
+    raise RuntimeError(
+        "Failed to generate a valid partition after maximum restart attempts.")
 
 
 # ------------------------------------------------------------------------------
